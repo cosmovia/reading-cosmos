@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>我的阅读宇宙 Reading Cosmos - Cloud Edition</title>
+    <!-- 引入 Supabase 官方前端架构 SDK -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        :root {
+            --bg-cosmic: linear-gradient(to bottom, #0f172a 0%, #020617 100%);
+            --bg-card: rgba(30, 41, 59, 0.7);
+            --bg-card-hover: rgba(30, 41, 59, 0.95);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --text-primary: #f8fafc; 
+            --text-secondary: #94a3b8;
+            --accent-glow: rgba(14, 165, 233, 0.3);
+            
+            /* 分类色彩体系 */
+            --color-novel: #ec4899;   /* 小说 */
+            --color-hist: #c87a4b;    /* 历史 */
+            --color-phil: #8b5cf6;    /* 哲学 */
+            --color-psyc: #10b981;    /* 心理学 */
+            --color-biz: #f59e0b;     /* 商业 */
+            --color-tech: #0ea5e9;    /* 科技 */
+            --color-default: #64748b; /* 默认 */
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        body {
+            background: #020617;
+            background-image: var(--bg-cosmic);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+        }
+
+        #cosmos-bg-canvas {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            z-index: -1; pointer-events: none;
+        }
+
+        /* 认证视图拦截器 */
+        #auth-view {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: radial-gradient(circle at center, #0f172a 0%, #020617 100%);
+            z-index: 1000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .auth-card {
+            background: rgba(15, 23, 42, 0.6);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border-color);
+            padding: 40px;
+            border-radius: 24px;
+            width: 90%;
+            max-width: 400px;
+            box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5);
+            text-align: center;
+        }
+
+        /* App 头部布局 */
+        header {
+            max-width: 1200px;
+            width: 100%;
+            margin: 0 auto;
+            padding: 36px 24px 24px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 20px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .brand-title {
+            font-size: 2rem;
+            font-weight: 800;
+            letter-spacing: -0.02em;
+            background: linear-gradient(to right, #fff, #94a3b8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .universe-counter {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 12px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            font-size: 0.8rem;
+            color: #38bdf8;
+        }
+
+        .nav-container {
+            display: inline-flex;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 4px;
+            border-radius: 24px;
+        }
+
+        .nav-btn {
+            background: transparent; border: none; color: var(--text-secondary);
+            padding: 8px 22px; font-size: 0.95rem; font-weight: 600;
+            border-radius: 20px; cursor: pointer; transition: all 0.2s;
+        }
+
+        .nav-btn.active {
+            background: rgba(255,255,255,0.15); color: #fff;
+        }
+
+        main {
+            max-width: 1200px; width: 100%; margin: 0 auto;
+            padding: 24px 24px 60px 24px; flex-grow: 1;
+        }
+
+        .view-section { display: none; animation: fadeIn 0.4s ease forwards; }
+        .view-section.active { display: block; }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* 书架模型 */
+        .shelf-control-bar { display: flex; justify-content: space-between; margin-bottom: 24px; align-items: center;}
+        .btn-primary {
+            background: #0ea5e9; color: #fff; border: none; padding: 10px 20px;
+            font-size: 0.9rem; font-weight: 500; border-radius: 12px; cursor: pointer;
+            display: inline-flex; align-items: center; gap: 8px; transition: all 0.2s;
+        }
+        .btn-primary:hover { background: #0284c7; }
+
+        .shelf-grid {
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 32px 24px;
+        }
+
+        .book-card {
+            background: var(--bg-card); border: 1px solid var(--border-color);
+            border-radius: 14px; cursor: pointer; transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            position: relative; overflow: hidden; padding: 12px;
+        }
+        .book-card:hover { transform: translateY(-6px); border-color: #0ea5e9; box-shadow: 0 12px 24px rgba(14,165,233,0.15); }
+
+        .card-actions {
+            position: absolute; top: 16px; right: 16px; display: flex; gap: 6px; opacity: 0; z-index: 10; transition: opacity 0.2s;
+        }
+        .book-card:hover .card-actions { opacity: 1; }
+
+        .action-icon-btn {
+            width: 28px; height: 28px; border-radius: 50%; background: #1e293b;
+            border: 1px solid var(--border-color); display: flex; align-items: center; justify-content: center;
+            font-size: 0.85rem; cursor: pointer; color: #fff;
+        }
+        .action-icon-btn:hover { background: #334155; }
+
+        .book-cover-wrapper {
+            width: 100%; aspect-ratio: 3 / 4; border-radius: 8px; overflow: hidden; margin-bottom: 12px;
+        }
+
+        .book-cover-fallback {
+            width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: center;
+            align-items: center; padding: 16px; text-align: center; position: relative;
+        }
+        .fallback-title { font-size: 1.1rem; font-weight: 700; color: #fff; line-height: 1.3; margin-bottom: 6px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;}
+        .fallback-author { font-size: 0.8rem; color: rgba(255,255,255,0.7); }
+
+        .rating-stars { color: #ffb800; font-size: 0.85rem; margin-top: 4px; }
+
+        /* 全屏详情面板与自适应向导 */
+        .detail-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(2, 6, 23, 0.7); backdrop-filter: blur(14px);
+            z-index: 100; display: none; justify-content: center; align-items: center; opacity: 0; transition: opacity 0.3s;
+        }
+        .detail-overlay.active { display: flex; opacity: 1; }
+
+        .detail-container {
+            background: #0f172a; border: 1px solid var(--border-color);
+            width: 92%; max-width: 1080px; height: 85vh; border-radius: 24px;
+            display: grid; grid-template-columns: 300px 1fr; overflow: hidden; position: relative;
+        }
+
+        .detail-top-actions { position: absolute; top: 20px; right: 20px; display: flex; gap: 12px; z-index: 50; }
+        .detail-action-round-btn {
+            width: 40px; height: 40px; border-radius: 50%; background: #1e293b; border: 1px solid var(--border-color);
+            display: flex; align-items: center; justify-content: center; font-size: 1.1rem; cursor: pointer; color: #fff;
+        }
+        .detail-action-edit.editing { background: #10b981; }
+
+        .detail-left { background: #0b0f19; padding: 45px 24px; display: flex; flex-direction: column; align-items: center; border-right: 1px solid var(--border-color); }
+        .detail-cover-box { width: 150px; aspect-ratio: 3/4; border-radius: 8px; overflow: hidden; margin-bottom: 20px; }
+        .detail-right { padding: 40px; overflow-y: auto; display: flex; flex-direction: column; gap: 24px; }
+
+        .detail-module { background: rgba(30,41,59,0.4); border: 1px solid var(--border-color); border-radius: 16px; padding: 20px; position: relative; }
+        .module-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; min-height: 24px; }
+        .module-title { font-size: 0.9rem; color: #38bdf8; font-weight: 600; }
+
+        /* 高质感非虚构向导提示 */
+        .module-subtitle-explanation {
+            font-size: 0.8rem; color: #38bdf8; background: rgba(14,165,233,0.1);
+            border-left: 3px solid #0ea5e9; padding: 8px 12px; border-radius: 4px; margin-bottom: 14px; line-height: 1.5; display: none;
+        }
+
+        .module-content-text { font-size: 0.95rem; line-height: 1.6; color: #cbd5e1; white-space: pre-wrap; }
+        .module-textarea {
+            width: 100%; background: #1e293b; border: 1px solid var(--border-color); border-radius: 8px;
+            color: #fff; padding: 12px; font-size: 0.95rem; line-height: 1.6; resize: vertical; min-height: 100px; display: none;
+        }
+
+        /* 表单与弹窗 */
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.5); backdrop-filter: blur(8px); z-index: 110; display: none; justify-content: center; align-items: center;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal-box { background: #0f172a; border: 1px solid var(--border-color); border-radius: 20px; width: 90%; max-width: 440px; padding: 32px; }
+        
+        .form-group { margin-bottom: 20px; text-align: left;}
+        .form-group label { display: block; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 8px; }
+        .form-input { width: 100%; background: #1e293b; border: 1px solid var(--border-color); border-radius: 8px; padding: 10px 12px; color: #fff; font-size: 0.95rem; }
+
+        /* 宇宙画布舱 */
+        .cosmos-viewport-container {
+            width: 100%; height: 65vh; background: #020617; border: 1px solid var(--border-color); border-radius: 24px; position: relative; overflow: hidden;
+        }
+        #interactive-cosmos-canvas { width: 100%; height: 100%; display: block; cursor: grab; }
+
+        /* 加载指示器 */
+        .ai-loading-mask {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15,23,42,0.8);
+            display: flex; justify-content: center; align-items: center; border-radius: 16px; opacity: 0; pointer-events: none; transition: opacity 0.25s;
+        }
+        .ai-loading-mask.active { opacity: 1; pointer-events: auto; }
+        .spinner { width: 24px; height: 24px; border: 2px solid rgba(255,255,255,0.1); border-top-color: #0ea5e9; border-radius: 50%; animation: spin 0.8s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* 数据洞察卡片 */
+        .insights-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+        .insight-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 20px; padding: 24px; position: relative; }
+        .insight-card-full { grid-column: 1 / -1; }
+
+        .star-rating-interactive span { font-size: 1.4rem; cursor: pointer; color: #475569; margin: 0 2px; }
+        .star-rating-interactive span.active { color: #ffb800; }
+    </style>
+</head>
+<body>
+
+    <canvas id="cosmos-bg-canvas"></canvas>
+
+    <!-- AUTH MODULE: Supabase 认证拦截墙 -->
+    <div id="auth-view">
+        <div class="auth-card">
+            <h2 style="margin-bottom: 12px; font-weight: 800; letter-spacing: -0.03em;">🪐 思想宇宙中心</h2>
+            <p style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 24px;">登录以跨设备同步您的阅读星系与 AI 资产</p>
+            <div class="form-group">
+                <label>电子邮箱</label>
+                <input type="email" id="auth-email" class="form-input" placeholder="name@example.com">
+            </div>
+            <div class="form-group" style="margin-bottom: 24px;">
+                <label>密码</label>
+                <input type="password" id="auth-password" class="form-input" placeholder="请输入密码">
+            </div>
+            <button class="btn-primary" style="width: 100%; justify-content: center; margin-bottom: 12px;" onclick="handleAuth('signin')">登 录</button>
+            <button class="btn-primary" style="width: 100%; justify-content: center; background: transparent; border: 1px solid #334155;" onclick="handleAuth('signup')">注 册 新 账 户</button>
+        </div>
+    </div>
+
+    <!-- APP MAIN VIEW -->
+    <header>
+        <div>
+            <h1 class="brand-title">Reading Cosmos</h1>
+            <p style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 4px;">Supabase 云同步 × GLM-4-Flash 智能格栅</p>
+        </div>
+        <div style="display: flex; align-items: center; gap: 16px;">
+            <div class="universe-counter" id="global-counter">🪐 载入星系中...</div>
+            <div class="nav-container">
+                <button class="nav-btn active" onclick="switchView('shelf')">思想仓</button>
+                <button class="nav-btn" onclick="switchView('cosmos')">星图矩阵</button>
+                <button class="nav-btn" onclick="switchView('insights')">维度洞察</button>
+                <button class="nav-btn" onclick="switchView('settings')">星际控制台</button>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <!-- VIEW 1: 书架思想仓 -->
+        <section id="view-shelf" class="view-section active">
+            <div class="shelf-control-bar">
+                <span style="color: var(--text-secondary); font-size: 0.9rem;">我的私有知识晶体列表：</span>
+                <button class="btn-primary" onclick="openModal('add-book-modal')">＋ 锚定新思想星球</button>
+            </div>
+            <div class="shelf-grid" id="shelf-container"></div>
+        </section>
+
+        <!-- VIEW 2: 星图矩阵 (Canvas) -->
+        <section id="view-cosmos" class="view-section">
+            <div class="cosmos-viewport-container" id="cosmos-box-container">
+                <canvas id="interactive-cosmos-canvas"></canvas>
+            </div>
+        </section>
+
+        <!-- VIEW 3: 维度洞察 -->
+        <section id="view-insights" class="view-section">
+            <div class="insights-grid">
+                <div class="insight-card insight-card-full">
+                    <h3 style="color:#0ea5e9; margin-bottom:12px;">🧠 结构化星系图谱报告</h3>
+                    <p id="insight-summary-text" style="line-height:1.7; color:#cbd5e1;">正在基于您的云端全量数据聚合思想人格...</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- VIEW 4: 星际控制台（密钥与云设置） -->
+        <section id="view-settings" class="view-section">
+            <div class="insight-card" style="max-width: 550px; margin: 0 auto;">
+                <h3 style="margin-bottom: 16px; color: #0ea5e9;">⚙️ 星际共振安全控制台</h3>
+                <div class="form-group">
+                    <label>GLM-4-Flash API Key (随账户安全加密同步)</label>
+                    <input type="password" id="setting-api-key" class="form-input" placeholder="填入您的智谱 API Key (例如: 84b3....b9a...)">
+                </div>
+                <div class="form-group">
+                    <label>API 终点代理端 (默认官方通道)</label>
+                    <input type="text" id="setting-api-endpoint" class="form-input" value="https://open.bigmodel.cn/api/paas/v4/chat/completions">
+                </div>
+                <button class="btn-primary" style="margin-right: 12px;" onclick="saveSettings()">保存配置至云端</button>
+                <button class="btn-primary" style="background:#ef4444;" onclick="handleLogout()">切断共振 (退出登录)</button>
+            </div>
+        </section>
+    </main>
+
+    <!-- MODAL: 新增书籍 -->
+    <div class="modal-overlay" id="add-book-modal">
+        <div class="modal-box">
+            <h3 style="margin-bottom: 20px;">🪐 捕获新的思想质点</h3>
+            <div class="form-group">
+                <label>图书名称 *</label>
+                <input type="text" id="add-title" class="form-input" placeholder="输入完整书名">
+            </div>
+            <div class="form-group">
+                <label>创作者 / 作者 *</label>
+                <input type="text" id="add-author" class="form-input" placeholder="作者名字">
+            </div>
+            <div class="form-group">
+                <label>智库范畴 / 类别 *</label>
+                <input type="text" id="add-category" class="form-input" placeholder="例如：小说、历史、哲学、商业、心理学">
+            </div>
+            <div style="display:flex; justify-content:flex-end; gap:12px; margin-top:24px;">
+                <button class="btn-primary" style="background:#334155;" onclick="closeModal('add-book-modal')">取消</button>
+                <button class="btn-primary" onclick="submitNewBook()">启动同步构筑</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- FULLSCREEN DETAIL PANEL -->
+    <div class="detail-overlay" id="book-detail-overlay" onclick="if(event.target.id==='book-detail-overlay') closeDetail()">
+        <div class="detail-container">
+            <div class="detail-top-actions">
+                <div class="detail-action-round-btn detail-action-edit" id="detail-edit-toggle" onclick="toggleEditMode()">📝</div>
+                <div class="detail-action-round-btn" onclick="closeDetail()">✕</div>
+            </div>
+
+            <div class="detail-left">
+                <div class="detail-cover-box" id="detail-cover-slot"></div>
+                <h2 style="font-size:1.3rem; margin-bottom:8px; text-align:center;" id="detail-title-slot">书名</h2>
+                <div style="color:var(--text-secondary); font-size:0.9rem; margin-bottom:16px;" id="detail-author-slot">作者</div>
+                <div style="padding:4px 12px; border-radius:8px; font-size:0.8rem; background:rgba(255,255,255,0.05);" id="detail-cat-slot">分类</div>
+                <div style="margin-top:24px; text-align:center;">
+                    <span style="font-size:0.75rem; color:var(--text-secondary); display:block; margin-bottom:6px;">思想质量评级</span>
+                    <div class="star-rating-interactive" id="detail-stars-box">
+                        <span data-v="1">★</span><span data-v="2">★</span><span data-v="3">★</span><span data-v="4">★</span><span data-v="5">★</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="detail-right">
+                <!-- 模块1: 核心概要 -->
+                <div class="detail-module">
+                    <div class="ai-loading-mask"><div class="spinner"></div></div>
+                    <div class="module-header">
+                        <span class="module-title">🛸 全局核心概要 (GLM-4-Flash 自动化)</span>
+                        <button class="btn-primary" style="padding:4px 10px; font-size:0.75rem;" onclick="triggerAI('summary')">✦ 联网提炼</button>
+                    </div>
+                    <div class="module-content-text" id="view-summary"></div>
+                </div>
+
+                <!-- 模块2: 动态向导双轨架构 -->
+                <div class="detail-module">
+                    <div class="ai-loading-mask"><div class="spinner"></div></div>
+                    <div class="module-header">
+                        <span class="module-title" id="title-concepts">主要人物 / 关键概念解析</span>
+                        <button class="btn-primary edit-only" style="padding:4px 10px; font-size:0.75rem; display:none;" onclick="triggerAI('concepts')">✦ AI 辅助推演</button>
+                    </div>
+                    <div class="module-subtitle-explanation" id="exp-concepts"></div>
+                    <div class="module-content-text" id="view-concepts"></div>
+                    <textarea class="module-textarea" id="input-concepts" oninput="queueAutoSave('concepts')"></textarea>
+                </div>
+
+                <!-- 模块3: 动态向导双轨架构 -->
+                <div class="detail-module">
+                    <div class="ai-loading-mask"><div class="spinner"></div></div>
+                    <div class="module-header">
+                        <span class="module-title" id="title-thoughts">3个核心思想 / 金句感悟</span>
+                        <button class="btn-primary edit-only" style="padding:4px 10px; font-size:0.75rem; display:none;" onclick="triggerAI('thoughts')">✦ AI 辅助推演</button>
+                    </div>
+                    <div class="module-subtitle-explanation" id="exp-thoughts"></div>
+                    <div class="module-content-text" id="view-thoughts"></div>
+                    <textarea class="module-textarea" id="input-thoughts" oninput="queueAutoSave('thoughts')"></textarea>
+                </div>
+
+                <!-- 模块4: 动态向导双轨架构 -->
+                <div class="detail-module">
+                    <div class="ai-loading-mask"><div class="spinner"></div></div>
+                    <div class="module-header">
+                        <span class="module-title" id="title-actions">启发 / 行动建议</span>
+                        <button class="btn-primary edit-only" style="padding:4px 10px; font-size:0.75rem; display:none;" onclick="triggerAI('actions')">✦ AI 辅助推演</button>
+                    </div>
+                    <div class="module-subtitle-explanation" id="exp-actions"></div>
+                    <div class="module-content-text" id="view-actions"></div>
+                    <textarea class="module-textarea" id="input-actions" oninput="queueAutoSave('actions')"></textarea>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ========================================== ENGINE LOGIC ========================================== -->
+    <script>
+        // 初始化 Supabase
+        const SUPABASE_URL = "https://wyycauakphfsvkiypllh.supabase.co";
+        const SUPABASE_ANON_KEY = "sb_publishable_tIRmeLwn00iggumBtRlbzg_Z-yv9ole";
+        const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+        let currentUser = null;
+        let booksData = [];
+        let activeBook = null;
+        let isEditing = false;
+        let saveTimeout = null;
+
+        // 星空画布引擎状态
+        let canvas, ctx, stars = [], planets = [], offsetX = 0, offsetY = 0, scale = 1.0, isDragging = false, startX, startY;
+
+        // 色彩格栅
+        const PALETTE = {
+            '小说': '#ec4899', '历史': '#c87a4b', '哲学': '#8b5cf6', '心理学': '#10b981', '商业': '#f59e0b', '科技': '#0ea5e9'
+        };
+
+        window.addEventListener('DOMContentLoaded', () => {
+            initCosmosBackground();
+            monitorAuthStatus();
+            initInteractiveCanvas();
+        });
+
+        // 监听并维持登录状态
+        function monitorAuthStatus() {
+            supabase.auth.onAuthStateChange((event, session) => {
+                if (session) {
+                    currentUser = session.user;
+                    document.getElementById('auth-view').style.display = 'none';
+                    syncSettingsFromCloud();
+                    pullBooksFromCloud();
+                } else {
+                    currentUser = null;
+                    document.getElementById('auth-view').style.display = 'flex';
+                }
+            });
+        }
+
+        async function handleAuth(type) {
+            const email = document.getElementById('auth-email').value.trim();
+            const password = document.getElementById('auth-password').value.trim();
+            if(!email || !password) { alert('请输入邮箱和密码'); return; }
+
+            if(type === 'signup') {
+                const { error } = await supabase.auth.signUp({ email, password });
+                if(error) alert(`注册失败: ${error.message}`); else alert('注册成功，请直接点击登录！');
+            } else {
+                const { error } = await supabase.auth.signInWithPassword({ email, password });
+                if(error) alert(`登录失败: ${error.message}`);
+            }
+        }
+
+        async function handleLogout() {
+            await supabase.auth.signOut();
+            location.reload();
+        }
+
+        // 云端密钥同步逻辑 (优雅存储于 User Metadata)
+        function syncSettingsFromCloud() {
+            if(!currentUser) return;
+            const meta = currentUser.user_metadata || {};
+            if(meta.zhipu_key) document.getElementById('setting-api-key').value = meta.zhipu_key;
+            if(meta.api_endpoint) document.getElementById('setting-api-endpoint').value = meta.api_endpoint;
+        }
+
+        async function saveSettings() {
+            const key = document.getElementById('setting-api-key').value.trim();
+            const endpoint = document.getElementById('setting-api-endpoint').value.trim();
+            const { error } = await supabase.auth.updateUser({
+                data: { zhipu_key: key, api_endpoint: endpoint }
+            });
+            if(error) alert('设置同步失败: ' + error.message); else alert('星际控制台配置成功，全端已实时同步！');
+        }
+
+        // 核心数据层：从 Supabase 实时拉取
+        async function pullBooksFromCloud() {
+            if(!currentUser) return;
+            const { data, error } = await supabase.from('books').select('*').order('created_at', { ascending: false });
+            if(!error) {
+                booksData = data;
+                document.getElementById('global-counter').innerText = `🌈 已开辟 ${booksData.length} 个核心思想星球`;
+                renderShelf();
+                buildUniversePlanets();
+                renderInsights();
+            }
+        }
+
+        function getCategoryColor(cat) { return PALETTE[cat] || '#64748b'; }
+
+        function renderShelf() {
+            const container = document.getElementById('shelf-container');
+            container.innerHTML = '';
+            booksData.forEach(book => {
+                const card = document.createElement('div');
+                card.className = 'book-card';
+                card.onclick = () => openDetail(book);
+
+                const color = getCategoryColor(book.category);
+                const starsHtml = '★'.repeat(book.rating || 0) + '☆'.repeat(5 - (book.rating || 0));
+
+                card.innerHTML = `
+                    <div class="card-actions">
+                        <div class="action-icon-btn" onclick="event.stopPropagation(); deleteBook('${book.id}')">🗑️</div>
+                    </div>
+                    <div class="book-cover-wrapper" style="background:linear-gradient(135deg, ${color}33 0%, ${color}ff 100%)">
+                        <div class="book-cover-fallback">
+                            <div class="fallback-title">${book.title}</div>
+                            <div class="fallback-author">${book.author}</div>
+                        </div>
+                    </div>
+                    <div style="font-size:0.75rem; color:${color}; font-weight:700;">${book.category}</div>
+                    <div class="rating-stars">${starsHtml}</div>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        async function submitNewBook() {
+            const title = document.getElementById('add-title').value.trim();
+            const author = document.getElementById('add-author').value.trim();
+            const category = document.getElementById('add-category').value.trim();
+            if(!title || !author || !category) { alert('请完整填写必填字段'); return; }
+
+            const { data, error } = await supabase.from('books').insert([
+                { title, author, category, user_id: currentUser.id, rating: 5, summary: '等待注入概要...', concepts:'', thoughts:'', actions:'' }
+            ]).select();
+
+            if(!error) {
+                closeModal('add-book-modal');
+                await pullBooksFromCloud();
+                if(data && data[0]) openDetail(data[0]);
+            } else {
+                alert('数据库同步失败: ' + error.message);
+            }
+        }
+
+        async function deleteBook(id) {
+            if(confirm('确定要在云端彻底抹除这颗思想星球吗？')) {
+                const { error } = await supabase.from('books').delete().eq('id', id);
+                if(!error) pullBooksFromCloud();
+            }
+        }
+
+        // 双轨制动态向导交互核心
+        function openDetail(book) {
+            activeBook = book;
+            isEditing = false;
+            
+            const isNovel = (book.category === '小说');
+            
+            // 元素选择器
+            const tConcepts = document.getElementById('title-concepts');
+            const tThoughts = document.getElementById('title-thoughts');
+            const tActions = document.getElementById('title-actions');
+            const eConcepts = document.getElementById('exp-concepts');
+            const eThoughts = document.getElementById('exp-thoughts');
+            const eActions = document.getElementById('exp-actions');
+
+            if(isNovel) {
+                tConcepts.innerText = "主要人物 / 关键概念解析";
+                tThoughts.innerText = "3个核心思想 / 金句感悟";
+                tActions.innerText = "启发 / 行动建议";
+                eConcepts.innerHTML = ""; eThoughts.innerHTML = ""; eActions.innerHTML = "";
+            } else {
+                tConcepts.innerText = "核心问题";
+                tThoughts.innerText = "核心概念/工具";
+                tActions.innerText = "洞见本质";
+                eConcepts.innerHTML = "💡 <b>编辑向导：</b>仔细阅读前言、引言和目录，作者通常会在开头明确提出他要挑战的流行误解、要填补的知识空白或要解答的具体疑问。";
+                eThoughts.innerHTML = "💡 <b>编辑向导：</b>注意书中反复出现、被重点定义、作为章节标题的术语，思考这些核心概念/模型/框架/工具之间的关系：它们是并列的？还是层层递进的？";
+                eActions.innerHTML = "💡 <b>编辑向导：</b>这些核心概念/框架的本质是什么？作者的独特视角是什么？对你看待相关问题的视角有什么影响？";
+            }
+
+            document.getElementById('detail-title-slot').innerText = book.title;
+            document.getElementById('detail-author-slot').innerText = book.author;
+            document.getElementById('detail-cat-slot').innerText = book.category;
+            document.getElementById('detail-cover-slot').style.background = `linear-gradient(135deg, ${getCategoryColor(book.category)}77, ${getCategoryColor(book.category)})`;
+            
+            // 灌注数据
+            syncDetailFieldsToUI();
+            updateStarsUI(book.rating);
+            
+            // 绑定评分点击
+            document.querySelectorAll('#detail-stars-box span').forEach(s => {
+                s.onclick = async () => {
+                    const v = parseInt(s.getAttribute('data-v'));
+                    activeBook.rating = v;
+                    updateStarsUI(v);
+                    await supabase.from('books').update({ rating: v }).eq('id', activeBook.id);
+                    pullBooksFromCloud();
+                }
+            });
+
+            updateEditModeUI();
+            document.getElementById('book-detail-overlay').classList.add('active');
+        }
+
+        function syncDetailFieldsToUI() {
+            const fields = ['summary', 'concepts', 'thoughts', 'actions'];
+            fields.forEach(f => {
+                document.getElementById(`view-${f}`).innerText = activeBook[f] || '暂无数据';
+                document.getElementById(`input-${f}`).value = activeBook[f] || '';
+            });
+        }
+
+        function updateStarsUI(r) {
+            document.querySelectorAll('#detail-stars-box span').forEach(s => {
+                if(parseInt(s.getAttribute('data-v')) <= r) s.classList.add('active'); else s.classList.remove('active');
+            });
+        }
+
+        function updateEditModeUI() {
+            const btn = document.getElementById('detail-edit-toggle');
+            const exps = [document.getElementById('exp-concepts'), document.getElementById('exp-thoughts'), document.getElementById('exp-actions')];
+            const isNovel = activeBook ? (activeBook.category === '小说') : true;
+
+            if(isEditing) {
+                btn.innerText = '💾'; btn.classList.add('editing');
+                document.querySelectorAll('.edit-only').forEach(el => el.style.display = 'inline-flex');
+                if(!isNovel) exps.forEach(el => el.style.display = 'block');
+                ['concepts', 'thoughts', 'actions'].forEach(f => {
+                    document.getElementById(`view-${f}`).style.display = 'none';
+                    document.getElementById(`input-${f}`).style.display = 'block';
+                });
+            } else {
+                btn.innerText = '📝'; btn.classList.remove('editing');
+                document.querySelectorAll('.edit-only').forEach(el => el.style.display = 'none');
+                exps.forEach(el => el.style.display = 'none');
+                ['concepts', 'thoughts', 'actions'].forEach(f => {
+                    document.getElementById(`view-${f}`).style.display = 'block';
+                    document.getElementById(`input-${f}`).style.display = 'none';
+                });
+                syncDetailFieldsToUI();
+            }
+        }
+
+        function toggleEditMode() { isEditing = !isEditing; updateEditModeUI(); }
+
+        // 云端自动降频同步器 (Debounce)
+        function queueAutoSave(field) {
+            clearTimeout(saveTimeout);
+            const val = document.getElementById(`input-${field}`).value;
+            activeBook[field] = val;
+            saveTimeout = setTimeout(async () => {
+                await supabase.from('books').update({ [field]: val }).eq('id', activeBook.id);
+                pullBooksFromCloud();
+            }, 1000);
+        }
+
+        function closeDetail() { document.getElementById('book-detail-overlay').classList.remove('active'); }
+
+        // ========================================== GLM-4-Flash 真实外接网络请求层 ==========================================
+        async function triggerAI(field) {
+            const apiKey = currentUser?.user_metadata?.zhipu_key;
+            const endpoint = currentUser?.user_metadata?.api_endpoint || "https://open.bigmodel.cn/api/paas/v4/chat/completions";
+            
+            if(!apiKey) { alert('未检测到共振密钥，请前往 [星际控制台] 绑定您的 GLM-4 API Key'); return; }
+
+            const mask = document.getElementById(`view-${field}`).closest('.detail-module').querySelector('.ai-loading-mask');
+            mask.classList.add('active');
+
+            const isNovel = (activeBook.category === '小说');
+            
+            // 精密的双轨提示词生成矩阵
+            let prompt = `你是一个顶级的阅读向导和认知拆解专家。请针对书籍《${activeBook.title}》（作者：${activeBook.author}，分类：${activeBook.category}）进行高颗粒度提炼。`;
+            if (field === 'summary') {
+                prompt += `请输出 150 字左右的高度凝练的全局内容概要。`;
+            } else if (field === 'concepts') {
+                prompt += isNovel ? `请详细剖析该小说的主要核心人物性格、命运冲突线索、以及关键概念符号解析。` 
+                                  : `作者在书中试图挑战的流行误解是什么？他要填补的知识空白或要解答的具体“核心问题”是什么？请切中要害地回答。`;
+            } else if (field === 'thoughts') {
+                prompt += isNovel ? `请输出 3 个最具精神震慑力的金句内核或核心思想感悟。`
+                                  : `请指出书中被重点定义、作为核心骨架的“核心概念/模型/工具体系”，并剖析它们之间是并列还是层层递进的演进关系。`;
+            } else if (field === 'actions') {
+                prompt += isNovel ? `由于这是一部小说，请提炼其对人类现实生存状态、心理秩序、或长期视野的深度启发与行动共鸣。`
+                                  : `这些核心概念与分析框架的本质是什么？作者提供了怎样颠覆常规的独特视角？这些视角对普通人看待相关问题的眼光有什么重构性影响？请从“洞见本质”的角度深度铺开。`;
+            }
+
+            try {
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${apiKey}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        model: "glm-4-flash",
+                        messages: [
+                            { role: "system", content: "你是一个理性、严谨、充满智慧的数字智库大脑，擅长第一性原理进行文本结构化解构，请直接输出干货，不要包含任何客套话。" },
+                            { role: "user", content: prompt }
+                        ],
+                        temperature: 0.3
+                    })
+                });
+
+                const resData = await response.json();
+                if (resData.choices && resData.choices[0]) {
+                    const aiResult = resData.choices[0].message.content.trim();
+                    activeBook[field] = aiResult;
+                    
+                    // 刷入数据库
+                    await supabase.from('books').update({ [field]: aiResult }).eq('id', activeBook.id);
+                    syncDetailFieldsToUI();
+                    pullBooksFromCloud();
+                } else {
+                    alert('大模型返回异常，请检查 API Key 状态是否正常。');
+                }
+            } catch (err) {
+                console.error(err);
+                alert('网络共振中断: 无法连接到大模型终点。' + err.message);
+            } finally {
+                mask.classList.remove('active');
+            }
+        }
+
+        // ========================================== AUXILIARY GRAPHICS ENGINE ==========================================
+        function initCosmosBackground() {
+            const bcv = document.getElementById('cosmos-bg-canvas'); const bctx = bcv.getContext('2d');
+            bcv.width = window.innerWidth; bcv.height = window.innerHeight;
+            for(let i=0; i<50; i++) stars.push({x:Math.random()*bcv.width, y:Math.random()*bcv.height, r:Math.random()*1.5, s:Math.random()*0.05});
+            function draw() {
+                bctx.clearRect(0,0,bcv.width,bcv.height); bctx.fillStyle='#ffffff';
+                stars.forEach(s => { s.y -= s.s; if(s.y<0) s.y=bcv.height; bctx.beginPath(); bctx.arc(s.x,s.y,s.r,0,Math.PI*2); bctx.fill(); });
+                requestAnimationFrame(draw);
+            }
+            draw();
+        }
+
+        function initInteractiveCanvas() {
+            canvas = document.getElementById('interactive-cosmos-canvas'); ctx = canvas.getContext('2d');
+            canvas.addEventListener('mousedown', (e) => { isDragging = true; startX = e.clientX - offsetX; startY = e.clientY - offsetY; });
+            window.addEventListener('mousemove', (e) => { if(isDragging) { offsetX = e.clientX - startX; offsetY = e.clientY - startY; } });
+            window.addEventListener('mouseup', () => isDragging = false);
+            function loop() { renderPlanetsMatrix(); requestAnimationFrame(loop); }
+            loop();
+        }
+
+        function buildUniversePlanets() {
+            planets = booksData.map((b, idx) => {
+                const angle = idx * 2.4 + 0.5; const d = 80 + Math.sqrt(idx) * 50;
+                return { title: b.title, color: getCategoryColor(b.category), x: Math.cos(angle)*d, y: Math.sin(angle)*d, r: 12 };
+            });
+        }
+
+        function renderPlanetsMatrix() {
+            if(!ctx || document.getElementById('view-cosmos').style.display==='none') return;
+            ctx.clearRect(0,0,canvas.width,canvas.height); ctx.save();
+            ctx.translate(offsetX + canvas.width/2, offsetY + canvas.height/2); ctx.scale(scale, scale);
+            
+            planets.forEach(p => {
+                ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI*2);
+                ctx.fillStyle = p.color; ctx.shadowBlur = 15; ctx.shadowColor = p.color; ctx.fill();
+                ctx.shadowBlur = 0; ctx.fillStyle = '#94a3b8'; ctx.font = '10px sans-serif'; ctx.fillText(p.title, p.x - 20, p.y + 25);
+            });
+            ctx.restore();
+        }
+
+        function renderInsights() {
+            if(booksData.length === 0) return;
+            const catCounts = {}; booksData.forEach(b => catCounts[b.category] = (catCounts[b.category] || 0) + 1);
+            let dominant = '未知'; let max = 0; for(let c in catCounts) { if(catCounts[c]>max) { max = catCounts[c]; dominant = c; } }
+            document.getElementById('insight-summary-text').innerHTML = `🌌 经过全面审查，您的思想宇宙当前由 <b>【${dominant}】</b> 分类主导（占比 ${Math.round(max/booksData.length*100)}%）。您的大脑正在朝着高度自洽的认知网络进行演进，每一个注入的星球都在为您提供长周期的思维抗性。`;
+        }
+
+        function switchView(name) {
+            document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.view-section').forEach(s => s.classList.remove('active'));
+            document.getElementById(`view-${name}`).classList.add('active');
+            event.target.classList.add('active');
+            if(name==='cosmos') {
+                const container = document.getElementById('cosmos-box-container');
+                canvas.width = container.clientWidth; canvas.height = container.clientHeight;
+            }
+        }
+
+        function openModal(id) { document.getElementById(id).classList.add('active'); }
+        function closeModal(id) { document.getElementById(id).classList.remove('active'); }
+    </script>
+</body>
+</html>
