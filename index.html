@@ -1,0 +1,1074 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>读书宇宙 - 智能阅读管理系统</title>
+    <!-- Tailwind CSS v3 CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <!-- Lucide Icons for beautiful modern UI symbols -->
+    <script src="https://cdn.jsdelivr.net/npm/lucide@0.344.0/dist/umd/lucide.min.js"></script>
+    <!-- Chart.js for data visualization -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Supabase JS Client library -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.8/dist/umd/supabase-js.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;700&display=swap');
+        
+        body {
+            font-family: 'Space Grotesk', 'Noto Sans SC', sans-serif;
+            background-color: #030712;
+            overflow-x: hidden;
+        }
+        
+        /* Glassmorphism utility classes */
+        .glass-card {
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        
+        .glass-input {
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #f8fafc;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        
+        .glass-input:focus {
+            border-color: #6366f1;
+            box-shadow: 0 0 15px rgba(99, 102, 241, 0.25);
+            outline: none;
+        }
+
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #030712;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #1e1b4b;
+            border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #312e81;
+        }
+        
+        /* Shimmering loader effect */
+        .shimmer {
+            background: linear-gradient(90deg, rgba(255,255,255,0.03) 25%, rgba(255,255,255,0.08) 50%, rgba(255,255,255,0.03) 75%);
+            background-size: 200% 100%;
+            animation: loading-shimmer 1.5s infinite;
+        }
+        @keyframes loading-shimmer {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+    </style>
+</head>
+<body class="text-slate-100 min-h-screen relative">
+
+    <!-- Ambient Cosmic Starfield Canvas Background -->
+    <canvas id="starfield" class="fixed inset-0 pointer-events-none z-0 opacity-60"></canvas>
+
+    <!-- Top Loading Bar Indicator -->
+    <div id="globalLoadingBar" class="fixed top-0 left-0 h-1 bg-gradient-to-r from-cyan-500 via-indigo-500 to-purple-500 w-0 transition-all duration-300 z-50"></div>
+
+    <!-- MAIN NOTIFICATION TOAST -->
+    <div id="toast" class="fixed bottom-6 right-6 z-50 transform translate-y-20 opacity-0 transition-all duration-300 flex items-center p-4 rounded-xl shadow-2xl border backdrop-blur-xl max-w-sm">
+        <div id="toastIcon" class="mr-3 p-2 rounded-lg text-white"></div>
+        <p id="toastMessage" class="text-sm font-medium text-slate-200"></p>
+    </div>
+
+    <!-- AUTHENTICATION LAYER (LOGIN / REGISTRATION) -->
+    <div id="authContainer" class="fixed inset-0 z-40 flex items-center justify-center p-4">
+        <div class="glass-card w-full max-w-md rounded-2xl p-8 shadow-2xl relative overflow-hidden">
+            <div class="absolute -top-10 -right-10 w-40 h-40 bg-indigo-600/20 rounded-full blur-3xl"></div>
+            <div class="absolute -bottom-10 -left-10 w-40 h-40 bg-purple-600/20 rounded-full blur-3xl"></div>
+            
+            <div class="text-center mb-8 relative">
+                <div class="inline-flex p-3 rounded-full bg-indigo-500/10 text-indigo-400 mb-3 border border-indigo-500/20">
+                    <i data-lucide="orbit" class="w-8 h-8 animate-spin-slow"></i>
+                </div>
+                <h1 class="text-3xl font-bold bg-gradient-to-r from-white via-slate-200 to-indigo-300 bg-clip-text text-transparent">读书宇宙</h1>
+                <p class="text-slate-400 text-sm mt-1">跨端同步 · 大模型深度复盘阅读空间</p>
+            </div>
+
+            <!-- Auth Tabs Toggle -->
+            <div class="flex p-1 bg-slate-950/60 rounded-xl border border-white/5 mb-6">
+                <button id="tabLogin" class="flex-1 py-2 text-sm font-medium rounded-lg text-white bg-indigo-600/90 shadow transition-all duration-200" onclick="switchAuthTab('login')">登录账号</button>
+                <button id="tabRegister" class="flex-1 py-2 text-sm font-medium rounded-lg text-slate-400 hover:text-white transition-all duration-200" onclick="switchAuthTab('register')">新客注册</button>
+            </div>
+
+            <!-- Auth Forms -->
+            <form id="authForm" onsubmit="handleAuth(event)" class="space-y-4 relative">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">电子邮箱</label>
+                    <input type="email" id="authEmail" required class="w-full glass-input px-4 py-3 rounded-xl text-sm" placeholder="yourname@example.com">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">登录密码</label>
+                    <input type="password" id="authPassword" required class="w-full glass-input px-4 py-3 rounded-xl text-sm" placeholder="••••••••" minlength="6">
+                </div>
+                <button type="submit" id="authSubmitBtn" class="w-full mt-2 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-medium rounded-xl text-sm transition-all duration-200 shadow-lg shadow-indigo-600/20 active:scale-[0.98]">
+                    开启我的读书宇宙
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- MAIN APP CORE INTERFACE (Hidden by default until authed) -->
+    <div id="appContainer" class="hidden min-h-screen flex flex-col relative z-10 opacity-0 transition-opacity duration-500">
+        <!-- Top Navigation Bar -->
+        <header class="glass-card sticky top-0 z-30 border-b border-white/5 backdrop-blur-xl">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+                <div class="flex items-center space-x-3">
+                    <div class="text-indigo-400 p-1.5 bg-indigo-500/10 rounded-lg border border-indigo-500/20">
+                        <i data-lucide="orbit" class="w-5 h-5"></i>
+                    </div>
+                    <span class="text-lg font-bold bg-gradient-to-r from-white to-slate-300 bg-clip-text text-transparent tracking-wide">读书宇宙</span>
+                </div>
+                
+                <div class="flex items-center space-x-4">
+                    <span id="userBadge" class="hidden sm:inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-white/5 border border-white/10 text-slate-300">
+                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-2 animate-pulse"></span>
+                        <span id="userEmailDisplay">...</span>
+                    </span>
+                    <button onclick="openSettingsModal()" class="p-2 text-slate-400 hover:text-indigo-400 rounded-xl hover:bg-white/5 border border-transparent hover:border-white/5 transition-all" title="模型与配置中心">
+                        <i data-lucide="sliders" class="w-5 h-5"></i>
+                    </button>
+                    <button onclick="handleLogout()" class="p-2 text-slate-400 hover:text-rose-400 rounded-xl hover:bg-white/5 border border-transparent hover:border-white/5 transition-all" title="退出登录">
+                        <i data-lucide="log-out" class="w-5 h-5"></i>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Application Content Layout -->
+        <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+            
+            <!-- DASHBOARD OVERVIEW PANEL -->
+            <section class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <!-- Metrics Grid -->
+                <div class="md:col-span-2 grid grid-cols-2 gap-4">
+                    <div class="glass-card rounded-2xl p-5 relative overflow-hidden flex flex-col justify-between group transition-all duration-300 hover:border-white/15">
+                        <div class="flex justify-between items-start">
+                            <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">星系书籍总量</span>
+                            <div class="p-2 rounded-lg bg-indigo-500/10 text-indigo-400 border border-indigo-500/20"><i data-lucide="book-open" class="w-4 h-4"></i></div>
+                        </div>
+                        <div class="mt-4">
+                            <h3 id="statTotalBooks" class="text-4xl font-bold text-white tracking-tight">0</h3>
+                            <p class="text-xs text-slate-400 mt-1">已经托管并安全加密于云端端点</p>
+                        </div>
+                    </div>
+                    
+                    <div class="glass-card rounded-2xl p-5 relative overflow-hidden flex flex-col justify-between group transition-all duration-300 hover:border-white/15">
+                        <div class="flex justify-between items-start">
+                            <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">宇宙智理学分</span>
+                            <div class="p-2 rounded-lg bg-purple-500/10 text-purple-400 border border-purple-500/20"><i data-lucide="brain-circuit" class="w-4 h-4"></i></div>
+                        </div>
+                        <div class="mt-4">
+                            <h3 id="statAvgRating" class="text-4xl font-bold text-white tracking-tight">0.0</h3>
+                            <p class="text-xs text-slate-400 mt-1">当前星脉内书籍的平均综合评分</p>
+                        </div>
+                    </div>
+
+                    <div class="col-span-2 glass-card rounded-2xl p-4 flex items-center justify-between">
+                        <div class="flex items-center space-x-3">
+                            <div class="p-2.5 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20"><i data-lucide="sparkles" class="w-5 h-5"></i></div>
+                            <div>
+                                <h4 class="text-sm font-semibold text-white">GLM-4-Flash 联网智能引擎</h4>
+                                <p id="apiKeyStatus" class="text-xs text-slate-400">检测中...</p>
+                            </div>
+                        </div>
+                        <button onclick="openSettingsModal()" class="px-3 py-1.5 text-xs font-medium text-indigo-400 hover:text-indigo-300 bg-indigo-500/5 hover:bg-indigo-500/10 border border-indigo-500/20 rounded-lg transition-all">
+                            前往配置
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Visual Category Distribution Chart -->
+                <div class="glass-card rounded-2xl p-5 flex flex-col justify-between">
+                    <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 block">书籍知识图谱分布</span>
+                    <div class="relative flex-1 flex items-center justify-center min-h-[140px]">
+                        <canvas id="categoryChart"></canvas>
+                    </div>
+                </div>
+            </section>
+
+            <!-- CONTROLS & SEARCH ACTIONS BAR -->
+            <section class="flex flex-col sm:flex-row gap-4 justify-between items-center bg-slate-900/40 p-4 rounded-2xl border border-white/5 backdrop-blur-md">
+                <div class="relative w-full sm:w-72">
+                    <i data-lucide="search" class="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 transform -translate-y-1/2"></i>
+                    <input type="text" id="searchBar" oninput="filterBooks()" class="w-full glass-input pl-10 pr-4 py-2 rounded-xl text-sm" placeholder="检索书籍名称、作者或心得...">
+                </div>
+                <div class="flex items-center space-x-3 w-full sm:w-auto justify-end">
+                    <select id="categoryFilter" onchange="filterBooks()" class="glass-input px-3 py-2 rounded-xl text-sm bg-slate-950">
+                        <option value="all">全部分类</option>
+                        <option value="虚构小说">虚构小说</option>
+                        <option value="非虚构认知">非虚构认知</option>
+                        <option value="技术成长">技术成长</option>
+                        <option value="搞钱研究">搞钱研究</option>
+                        <option value="其他维度">其他维度</option>
+                    </select>
+                    <button onclick="openBookModal()" class="flex items-center space-x-2 px-4 py-2 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-sm font-medium rounded-xl transition-all shadow-md shadow-indigo-600/10 whitespace-nowrap">
+                        <i data-lucide="plus" class="w-4 h-4"></i>
+                        <span>搭载新书籍</span>
+                    </button>
+                </div>
+            </section>
+
+            <!-- MAIN BOOKS GRID / EMPTY LIST LAYER -->
+            <section id="booksGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <!-- Generated dynamically via javascript -->
+            </section>
+            
+            <div id="emptyState" class="hidden flex-col items-center justify-center py-20 text-center glass-card rounded-2xl border-dashed border-white/10">
+                <div class="p-4 bg-slate-900 rounded-full text-slate-500 mb-4 border border-white/5"><i data-lucide="layers" class="w-8 h-8"></i></div>
+                <h3 class="text-lg font-medium text-slate-300">星脉空无一物</h3>
+                <p class="text-sm text-slate-500 mt-1 max-w-xs">您的读书宇宙中还没有搭载任何书籍资产，现在点击右上角新增吧！</p>
+            </div>
+        </main>
+    </div>
+
+    <!-- BOOK MODAL (ADD / EDIT BOOK ENTRY) -->
+    <div id="bookModal" class="fixed inset-0 z-50 invisible opacity-0 transition-all duration-300 flex items-center justify-center p-4 backdrop-blur-md bg-black/40">
+        <div class="glass-card w-full max-w-2xl rounded-2xl max-h-[90vh] overflow-y-auto shadow-2xl flex flex-col">
+            <div class="p-6 border-b border-white/5 flex justify-between items-center sticky top-0 bg-slate-950/80 backdrop-blur-md z-10">
+                <h3 id="modalTitle" class="text-lg font-bold text-white flex items-center"><i data-lucide="book-marked" class="w-5 h-5 mr-2 text-indigo-400"></i>搭载书籍轨道</h3>
+                <button onclick="closeBookModal()" class="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-white/5"><i data-lucide="x" class="w-5 h-5"></i></button>
+            </div>
+            
+            <form id="bookForm" onsubmit="saveBook(event)" class="p-6 space-y-5 flex-1">
+                <input type="hidden" id="bookId">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-400 uppercase mb-1.5 tracking-wider">书籍名称 *</label>
+                        <input type="text" id="bookTitle" required class="w-full glass-input px-4 py-2.5 rounded-xl text-sm" placeholder="例如：原子习惯">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-400 uppercase mb-1.5 tracking-wider">主创作者 *</label>
+                        <input type="text" id="bookAuthor" required class="w-full glass-input px-4 py-2.5 rounded-xl text-sm" placeholder="例如：詹姆斯·克利尔">
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-400 uppercase mb-1.5 tracking-wider">归属星脉分类 *</label>
+                        <select id="bookCategory" required onchange="adaptFormLabels()" class="w-full glass-input px-4 py-2.5 rounded-xl text-sm bg-slate-950">
+                            <option value="非虚构认知">非虚构认知 (自我提升/社会科学/管理)</option>
+                            <option value="虚构小说">虚构小说 (科幻/文学/剧情)</option>
+                            <option value="技术成长">技术成长 (编程/专业硬技能)</option>
+                            <option value="搞钱研究">搞钱研究 (商业/投资/财务自由)</option>
+                            <option value="其他维度">其他维度</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-400 uppercase mb-1.5 tracking-wider">个人心流打分 (1-5 星)</label>
+                        <div class="flex items-center space-x-1 py-1 text-amber-400" id="starRatingSelect">
+                            <!-- JS will inject star triggers -->
+                        </div>
+                        <input type="hidden" id="bookRating" value="5">
+                    </div>
+                </div>
+
+                <!-- DUAL-TRACK DYNAMIC INPUTS BASED ON CATEGORY -->
+                <div class="space-y-4 border-t border-white/5 pt-4">
+                    <div class="flex items-center space-x-2 text-xs font-bold text-indigo-400 uppercase tracking-wider mb-1">
+                        <i data-lucide="git-branch" class="w-3.5 h-3.5"></i>
+                        <span id="trackLabel">多维双轨阅读沙盒</span>
+                    </div>
+                    
+                    <div>
+                        <label id="lblSummary" class="block text-xs font-medium text-slate-400 mb-1">核心主线 / 内容梗概</label>
+                        <textarea id="bookSummary" rows="2" class="w-full glass-input px-4 py-2 rounded-xl text-sm" placeholder="简单归纳这本书的核心内容..."></textarea>
+                    </div>
+                    <div>
+                        <label id="lblConcepts" class="block text-xs font-medium text-slate-400 mb-1">精髓概念 / 关键设定</label>
+                        <textarea id="bookConcepts" rows="2" class="w-full glass-input px-4 py-2 rounded-xl text-sm" placeholder="记录书中打动你的核心公式、论点或惊艳设定..."></textarea>
+                    </div>
+                    <div>
+                        <label id="lblThoughts" class="block text-xs font-medium text-slate-400 mb-1">心流内省 / 批判性思维</label>
+                        <textarea id="bookThoughts" rows="2" class="w-full glass-input px-4 py-2 rounded-xl text-sm" placeholder="联系自身实际，有哪些赞同、反对或延伸思考..."></textarea>
+                    </div>
+                    <div>
+                        <label id="lblActions" class="block text-xs font-medium text-slate-400 mb-1">破圈破局 / 行动敏捷指南</label>
+                        <textarea id="bookActions" rows="2" class="w-full glass-input px-4 py-2 rounded-xl text-sm" placeholder="你可以把书中的哪一个改变应用到生活或工作中？"></textarea>
+                    </div>
+                </div>
+
+                <div class="flex justify-end space-x-3 border-t border-white/5 pt-4">
+                    <button type="button" onclick="closeBookModal()" class="px-4 py-2.5 border border-white/10 hover:bg-white/5 text-slate-300 rounded-xl text-sm font-medium transition-all">取消</button>
+                    <button type="submit" class="px-6 py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-xl text-sm font-medium transition-all shadow-md">注入星脉</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- AI EXPANDED METRIC OVERVIEW MODAL -->
+    <div id="aiAnalysisModal" class="fixed inset-0 z-50 invisible opacity-0 transition-all duration-300 flex items-center justify-center p-4 backdrop-blur-md bg-black/50">
+        <div class="glass-card w-full max-w-3xl rounded-2xl max-h-[85vh] overflow-y-auto shadow-2xl flex flex-col">
+            <div class="p-6 border-b border-white/5 flex justify-between items-center sticky top-0 bg-slate-950/80 backdrop-blur-md z-10">
+                <div class="flex items-center space-x-2">
+                    <div class="p-1.5 rounded-lg bg-purple-500/10 text-purple-400 border border-purple-500/20 animate-pulse">
+                        <i data-lucide="sparkles" class="w-5 h-5"></i>
+                    </div>
+                    <h3 class="text-lg font-bold text-white">GLM-4-Flash 联网穿透式透视复盘</h3>
+                </div>
+                <button onclick="closeAiModal()" class="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-white/5"><i data-lucide="x" class="w-5 h-5"></i></button>
+            </div>
+            
+            <div class="p-6 space-y-6">
+                <!-- Target Book Meta Brief -->
+                <div class="p-4 bg-white/5 border border-white/10 rounded-xl flex justify-between items-center">
+                    <div>
+                        <h4 id="aiTargetTitle" class="text-base font-bold text-white">---</h4>
+                        <p id="aiTargetAuthor" class="text-xs text-slate-400 mt-0.5">---</p>
+                    </div>
+                    <span id="aiTargetCategory" class="px-2.5 py-1 bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 rounded-lg text-xs font-medium">---</span>
+                </div>
+
+                <!-- Analysis Display Area -->
+                <div id="aiOutputArea" class="prose prose-invert text-slate-300 text-sm leading-relaxed space-y-4 max-w-none border border-white/5 p-5 bg-slate-950/50 rounded-xl min-h-[250px]">
+                    <!-- Loading shimmer default -->
+                    <div class="space-y-3" id="aiLoadingSkeleton">
+                        <div class="h-4 bg-white/5 rounded w-1/4 shimmer"></div>
+                        <div class="h-4 bg-white/5 rounded w-full shimmer"></div>
+                        <div class="h-4 bg-white/5 rounded w-full shimmer"></div>
+                        <div class="h-4 bg-white/5 rounded w-5/6 shimmer"></div>
+                        <div class="h-4 bg-white/5 rounded w-2/3 shimmer"></div>
+                    </div>
+                    <div id="aiRealText" class="whitespace-pre-wrap font-sans"></div>
+                </div>
+            </div>
+            <div class="p-4 bg-slate-950/60 border-t border-white/5 flex justify-end">
+                <button onclick="closeAiModal()" class="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-medium transition-all">关闭洞察舱</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- SETTINGS CONFIGURATION CENTER MODAL -->
+    <div id="settingsModal" class="fixed inset-0 z-50 invisible opacity-0 transition-all duration-300 flex items-center justify-center p-4 backdrop-blur-md bg-black/40">
+        <div class="glass-card w-full max-w-md rounded-2xl shadow-2xl p-6 space-y-5">
+            <div class="flex justify-between items-center border-b border-white/5 pb-3">
+                <h3 class="text-base font-bold text-white flex items-center"><i data-lucide="sliders" class="w-4 h-4 mr-2 text-indigo-400"></i>大模型配置中心</h3>
+                <button onclick="closeSettingsModal()" class="text-slate-400 hover:text-white"><i data-lucide="x" class="w-4 h-4"></i></button>
+            </div>
+
+            <div class="space-y-4">
+                <div>
+                    <div class="flex justify-between items-center mb-1">
+                        <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider">智谱 GLM API Key</label>
+                        <a href="https://open.bigmodel.cn/" target="_blank" class="text-[11px] text-indigo-400 hover:underline flex items-center">获取密钥 <i data-lucide="external-link" class="w-3 h-3 ml-0.5"></i></a>
+                    </div>
+                    <input type="password" id="cfgApiKey" class="w-full glass-input px-4 py-2.5 rounded-xl text-sm" placeholder="填入以 glm- 开头的真实密钥">
+                    <p class="text-[11px] text-slate-500 mt-1">此密钥绝对安全，仅存在您的本地浏览器中，绝不上报服务器。</p>
+                </div>
+                
+                <div>
+                    <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">API 端点 URL (防跨域/中转代理)</label>
+                    <input type="text" id="cfgEndpoint" class="w-full glass-input px-4 py-2.5 rounded-xl text-sm" placeholder="https://open.bigmodel.cn/api/paas/v4/chat/completions">
+                </div>
+            </div>
+
+            <div class="flex justify-end space-x-2 border-t border-white/5 pt-4">
+                <button onclick="closeSettingsModal()" class="px-4 py-2 border border-white/10 text-slate-300 hover:bg-white/5 rounded-xl text-xs">取消</button>
+                <button onclick="saveSettings()" class="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-medium shadow-md">保存配置</button>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- CORE SYSTEM APPLICATION JAVASCRIPT LOGIC -->
+    <script>
+        // Supabase Infrastructure Verification Credentials (Directly Wired)
+        const SUPABASE_URL = "https://wyycauakphfsvkiypllh.supabase.co";
+        const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind5eWNhdWFrcGhmc3ZraXlwbGxoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3MjE2MzMsImV4cCI6MjA5NzI5NzYzM30.-7WsBsPmI3uS25LtcZtIB2NUqq8olnw273ljGqNN64o";
+        
+        let supabaseClient;
+        let globalUser = null;
+        let originalBooksCache = [];
+        let categoryChartInstance = null;
+        let currentAuthMode = 'login';
+
+        // Initialization Pipeline
+        document.addEventListener('DOMContentLoaded', () => {
+            initializeStarfield();
+            lucide.createIcons();
+            initSupabase();
+            initializeRatingStars();
+            loadSettingsForm();
+            checkCurrentUser();
+        });
+
+        function initSupabase() {
+            try {
+                supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+            } catch (err) {
+                showToast("Supabase客户端加载失败，请检查密钥或连接", "error");
+            }
+        }
+
+        // Ambient Background Mechanics
+        function initializeStarfield() {
+            const canvas = document.getElementById('starfield');
+            const ctx = canvas.getContext('2d');
+            let stars = [];
+            
+            function resize() {
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+            }
+            window.addEventListener('resize', resize);
+            resize();
+
+            for(let i=0; i<70; i++) {
+                stars.push({
+                    x: Math.random() * canvas.width,
+                    y: Math.random() * canvas.height,
+                    radius: Math.random() * 1.5,
+                    vx: (Math.random() - 0.5) * 0.05,
+                    vy: (Math.random() - 0.5) * 0.05,
+                    alpha: Math.random(),
+                    phase: Math.random() * Math.PI
+                });
+            }
+
+            function animate() {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                stars.forEach(s => {
+                    s.x += s.vx;
+                    s.y += s.vy;
+                    s.phase += 0.01;
+                    s.alpha = 0.3 + Math.sin(s.phase) * 0.4;
+                    
+                    if (s.x < 0 || s.x > canvas.width) s.vx *= -1;
+                    if (s.y < 0 || s.y > canvas.height) s.vy *= -1;
+                    
+                    ctx.beginPath();
+                    ctx.fillStyle = `rgba(165, 180, 252, ${s.alpha})`;
+                    ctx.arc(s.x, s.y, s.radius, 0, Math.PI * 2);
+                    ctx.fill();
+                });
+                requestAnimationFrame(animate);
+            }
+            animate();
+        }
+
+        function initializeRatingStars() {
+            const container = document.getElementById('starRatingSelect');
+            container.innerHTML = '';
+            for(let i=1; i<=5; i++) {
+                const star = document.createElement('i');
+                star.setAttribute('data-lucide', 'star');
+                star.className = "w-5 h-5 cursor-pointer transition-colors fill-amber-400 text-amber-400";
+                star.dataset.value = i;
+                star.onclick = () => setFormRating(i);
+                container.appendChild(star);
+            }
+            lucide.createIcons({attrs: {class: ['w-5', 'h-5']}});
+        }
+
+        function setFormRating(rating) {
+            document.getElementById('bookRating').value = rating;
+            const stars = document.querySelectorAll('#starRatingSelect i');
+            stars.forEach((star, idx) => {
+                if (idx < rating) {
+                    star.classList.add('fill-amber-400', 'text-amber-400');
+                    star.classList.remove('text-slate-600', 'fill-transparent');
+                } else {
+                    star.classList.remove('fill-amber-400', 'text-amber-400');
+                    star.classList.add('text-slate-600', 'fill-transparent');
+                }
+            });
+        }
+
+        // Global Visual Notification Toast Helper
+        function showToast(message, type = 'info') {
+            const toast = document.getElementById('toast');
+            const icon = document.getElementById('toastIcon');
+            const msg = document.getElementById('toastMessage');
+            
+            msg.innerText = message;
+            if(type === 'success') {
+                toast.className = "fixed bottom-6 right-6 z-50 p-4 rounded-xl shadow-2xl border backdrop-blur-xl max-w-sm flex items-center bg-emerald-950/80 border-emerald-500/30 text-emerald-200";
+                icon.innerHTML = '<i data-lucide="check-circle" class="w-5 h-5"></i>';
+            } else if(type === 'error') {
+                toast.className = "fixed bottom-6 right-6 z-50 p-4 rounded-xl shadow-2xl border backdrop-blur-xl max-w-sm flex items-center bg-rose-950/80 border-rose-500/30 text-rose-200";
+                icon.innerHTML = '<i data-lucide="alert-triangle" class="w-5 h-5"></i>';
+            } else {
+                toast.className = "fixed bottom-6 right-6 z-50 p-4 rounded-xl shadow-2xl border backdrop-blur-xl max-w-sm flex items-center bg-slate-900/90 border-white/10 text-slate-200";
+                icon.innerHTML = '<i data-lucide="info" class="w-5 h-5"></i>';
+            }
+            lucide.createIcons();
+            
+            toast.classList.remove('translate-y-20', 'opacity-0');
+            setTimeout(() => {
+                toast.classList.add('translate-y-20', 'opacity-0');
+            }, 3500);
+        }
+
+        function setProgressBar(widthPercent) {
+            document.getElementById('globalLoadingBar').style.width = widthPercent + '%';
+            if(widthPercent === 100) {
+                setTimeout(() => { document.getElementById('globalLoadingBar').style.width = '0%'; }, 400);
+            }
+        }
+
+        // Authentication Core Pipeline Mechanics
+        function switchAuthTab(mode) {
+            currentAuthMode = mode;
+            const tabLogin = document.getElementById('tabLogin');
+            const tabRegister = document.getElementById('tabRegister');
+            const btn = document.getElementById('authSubmitBtn');
+            
+            if(mode === 'login') {
+                tabLogin.className = "flex-1 py-2 text-sm font-medium rounded-lg text-white bg-indigo-600/90 shadow transition-all duration-200";
+                tabRegister.className = "flex-1 py-2 text-sm font-medium rounded-lg text-slate-400 hover:text-white transition-all duration-200";
+                btn.innerText = "开启我的读书宇宙";
+            } else {
+                tabRegister.className = "flex-1 py-2 text-sm font-medium rounded-lg text-white bg-indigo-600/90 shadow transition-all duration-200";
+                tabLogin.className = "flex-1 py-2 text-sm font-medium rounded-lg text-slate-400 hover:text-white transition-all duration-200";
+                btn.innerText = "注册全新的星系账号";
+            }
+        }
+
+        async function checkCurrentUser() {
+            setProgressBar(30);
+            try {
+                const { data: { session }, error } = await supabaseClient.auth.getSession();
+                if (error) throw error;
+                if(session) {
+                    setupAppView(session.user);
+                } else {
+                    document.getElementById('authContainer').classList.remove('hidden');
+                    document.getElementById('appContainer').classList.add('hidden');
+                }
+            } catch (err) {
+                showToast("校验登录状态发生致命未知异常", "error");
+            } finally {
+                setProgressBar(100);
+            }
+        }
+
+        async function handleAuth(e) {
+            e.preventDefault();
+            const email = document.getElementById('authEmail').value.trim();
+            const password = document.getElementById('authPassword').value;
+            
+            if(!email || !password) return;
+            setProgressBar(40);
+            
+            try {
+                if(currentAuthMode === 'login') {
+                    const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+                    if(error) throw error;
+                    showToast("星系链接成功！正在校准宇宙常数...", "success");
+                    setupAppView(data.user);
+                } else {
+                    const { data, error } = await supabaseClient.auth.signUp({ email, password });
+                    if(error) throw error;
+                    if(data.user && data.user.identities && data.user.identities.length === 0) {
+                        showToast("该邮箱已被占用，请直接切换至登录", "error");
+                    } else {
+                        showToast("宇宙节点注册成功！请直接登录。", "success");
+                        switchAuthTab('login');
+                    }
+                }
+            } catch (err) {
+                showToast(err.message || "身份鉴权遇到问题，请重试", "error");
+            } finally {
+                setProgressBar(100);
+            }
+        }
+
+        async function handleLogout() {
+            setProgressBar(40);
+            const { error } = await supabaseClient.auth.signOut();
+            if(!error) {
+                globalUser = null;
+                document.getElementById('appContainer').classList.add('hidden');
+                document.getElementById('appContainer').classList.remove('opacity-100');
+                document.getElementById('authContainer').classList.remove('hidden');
+                showToast("安全登出，阅读星链已断开", "info");
+            } else {
+                showToast("登出星脉异常", "error");
+            }
+            setProgressBar(100);
+        }
+
+        function setupAppView(user) {
+            globalUser = user;
+            document.getElementById('authContainer').classList.add('hidden');
+            const app = document.getElementById('appContainer');
+            app.classList.remove('hidden');
+            setTimeout(() => app.classList.add('opacity-100'), 50);
+            
+            document.getElementById('userEmailDisplay').innerText = user.email;
+            fetchBooksFromCloud();
+        }
+
+        // Settings / API Keys Pipeline
+        function loadSettingsForm() {
+            const savedKey = localStorage.getItem('GLM_API_KEY') || '';
+            const savedEndpoint = localStorage.getItem('GLM_ENDPOINT') || 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
+            document.getElementById('cfgApiKey').value = savedKey;
+            document.getElementById('cfgEndpoint').value = savedEndpoint;
+            updateApiKeyIndicator(savedKey);
+        }
+
+        function updateApiKeyIndicator(key) {
+            const status = document.getElementById('apiKeyStatus');
+            if(key && key.startsWith('glm-')) {
+                status.innerText = "大模型安全密钥就绪 · 支持联网精细复盘";
+                status.className = "text-xs text-emerald-400";
+            } else {
+                status.innerText = "未检测到真实大模型API Key，联网复盘暂不可用";
+                status.className = "text-xs text-amber-500";
+            }
+        }
+
+        function openSettingsModal() {
+            const m = document.getElementById('settingsModal');
+            m.classList.remove('invisible', 'opacity-0');
+        }
+        function closeSettingsModal() {
+            const m = document.getElementById('settingsModal');
+            m.classList.add('invisible', 'opacity-0');
+        }
+
+        function saveSettings() {
+            const key = document.getElementById('cfgApiKey').value.trim();
+            let endpoint = document.getElementById('cfgEndpoint').value.trim();
+            if(!endpoint) endpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
+            
+            localStorage.setItem('GLM_API_KEY', key);
+            localStorage.setItem('GLM_ENDPOINT', endpoint);
+            
+            updateApiKeyIndicator(key);
+            closeSettingsModal();
+            showToast("大模型核心星脉参数同步更新成功", "success");
+        }
+
+        // Dual Track Dynamic Dynamic UI Form Switching
+        function adaptFormLabels() {
+            const cat = document.getElementById('bookCategory').value;
+            const trackLabel = document.getElementById('trackLabel');
+            
+            const lblSummary = document.getElementById('lblSummary');
+            const txtSummary = document.getElementById('bookSummary');
+            
+            const lblConcepts = document.getElementById('lblConcepts');
+            const txtConcepts = document.getElementById('bookConcepts');
+            
+            const lblThoughts = document.getElementById('lblThoughts');
+            const txtThoughts = document.getElementById('bookThoughts');
+            
+            const lblActions = document.getElementById('lblActions');
+            const txtActions = document.getElementById('bookActions');
+
+            if(cat === '虚构小说') {
+                trackLabel.innerText = "虚构小说感性与逻辑沙盒";
+                lblSummary.innerText = "故事核心主线 / 叙事梗概";
+                txtSummary.placeholder = "简述故事的发生背景、核心起承转合发展轨迹...";
+                
+                lblConcepts.innerText = "世界观设定 / 惊艳核心人物弧光";
+                txtConcepts.placeholder = "有哪些惊艳的科幻/奇幻宏大设定？或哪些人物具备高燃成长弧光？...";
+                
+                lblThoughts.innerText = "情感共鸣层 / 思想哲学隐喻内省";
+                txtThoughts.placeholder = "文字中流露的哪些宿命、悲剧或壮丽击中了你的情感防线？...";
+                
+                lblActions.innerText = "破圈破局 · 现实精神投射转化";
+                txtActions.placeholder = "作者投射到作品中的世界观，如何转换并指引你对抗现实生活中的迷茫？...";
+            } else {
+                trackLabel.innerText = "非虚构理性与生产力沙盒";
+                lblSummary.innerText = "核心理论架构 / 全书主干逻辑";
+                txtSummary.placeholder = "这本书到底在试图解决什么根本痛点，其核心论证体系是什么...";
+                
+                lblConcepts.innerText = "底层关键公式 / 精髓核心概念";
+                txtConcepts.placeholder = "提炼出全书最核心的术语、推导逻辑或操作性定义...";
+                
+                lblThoughts.innerText = "心流延伸内省 / 第一原理批判性批判";
+                txtThoughts.placeholder = "对照你的过往实践，有哪些认知黑洞被照亮？是否有不赞同作者的地方？...";
+                
+                lblActions.innerText = "知行合一 · 敏捷行动指南与破圈转化";
+                txtActions.placeholder = "转化为最少3项明天就能开始落地执行的微小习惯、改进行动或生产力模型...";
+            }
+        }
+
+        // Data Storage Pipelines (Cloud Database Layer)
+        async function fetchBooksFromCloud() {
+            setProgressBar(40);
+            try {
+                const { data, error } = await supabaseClient
+                    .from('books')
+                    .select('*')
+                    .order('created_at', { ascending: false });
+                
+                if (error) throw error;
+                originalBooksCache = data || [];
+                renderBookshelf(originalBooksCache);
+                calculateAndRenderCharts(originalBooksCache);
+            } catch (err) {
+                showToast("拉取星脉书籍出现异常: " + err.message, "error");
+            } finally {
+                setProgressBar(100);
+            }
+        }
+
+        function renderBookshelf(books) {
+            const grid = document.getElementById('booksGrid');
+            const empty = document.getElementById('emptyState');
+            grid.innerHTML = '';
+            
+            if(books.length === 0) {
+                empty.classList.remove('hidden');
+                empty.classList.add('flex');
+                return;
+            }
+            empty.classList.add('hidden');
+            empty.classList.remove('flex');
+            
+            books.forEach(b => {
+                const card = document.createElement('div');
+                card.className = "glass-card rounded-2xl p-5 flex flex-col justify-between relative group transition-all duration-300 hover:-translate-y-1 hover:border-white/15 hover:shadow-xl hover:shadow-indigo-950/10";
+                
+                // Constructing Star Display HTML
+                let starsHtml = '';
+                for(let i=1; i<=5; i++) {
+                    starsHtml += `<i data-lucide="star" class="w-3.5 h-3.5 ${i <= b.rating ? 'fill-amber-400 text-amber-400' : 'text-slate-600'}"></i>`;
+                }
+
+                card.innerHTML = `
+                    <div>
+                        <div class="flex justify-between items-start mb-3">
+                            <span class="text-[10px] font-bold tracking-wider uppercase px-2.5 py-1 rounded-lg bg-indigo-500/10 text-indigo-300 border border-indigo-500/15">${b.category}</span>
+                            <div class="flex items-center space-x-0.5">${starsHtml}</div>
+                        </div>
+                        <h4 class="text-base font-bold text-white group-hover:text-indigo-300 transition-colors line-clamp-1">${escapeHtml(b.title)}</h4>
+                        <p class="text-xs text-slate-400 mt-0.5 mb-4 italic">作者：${escapeHtml(b.author)}</p>
+                        
+                        <div class="space-y-2 text-xs text-slate-300/80 border-t border-white/5 pt-3">
+                            ${b.summary ? `<p class="line-clamp-2"><strong class="text-slate-400 font-medium">脉络:</strong> ${escapeHtml(b.summary)}</p>` : ''}
+                            ${b.actions ? `<p class="line-clamp-2"><strong class="text-slate-400 font-medium">知行:</strong> ${escapeHtml(b.actions)}</p>` : ''}
+                        </div>
+                    </div>
+
+                    <div class="flex items-center justify-between mt-5 pt-3 border-t border-white/5">
+                        <button onclick="triggerAiAnalysis('${b.id}')" class="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 border border-purple-500/20 text-xs font-medium transition-all">
+                            <i data-lucide="sparkles" class="w-3.5 h-3.5"></i>
+                            <span>AI 联网穿透复盘</span>
+                        </button>
+                        
+                        <div class="flex items-center space-x-1">
+                            <button onclick="openBookModal('${b.id}')" class="p-1.5 text-slate-400 hover:text-white rounded-md hover:bg-white/5" title="修订卡片"><i data-lucide="edit-3" class="w-3.5 h-3.5"></i></button>
+                            <button onclick="deleteBookItem('${b.id}')" class="p-1.5 text-slate-400 hover:text-rose-400 rounded-md hover:bg-white/5" title="销毁节点"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
+                        </div>
+                    </div>
+                `;
+                grid.appendChild(card);
+            });
+            lucide.createIcons();
+        }
+
+        // Filtering Logic
+        function filterBooks() {
+            const query = document.getElementById('searchBar').value.toLowerCase().trim();
+            const catFilter = document.getElementById('categoryFilter').value;
+            
+            const filtered = originalBooksCache.filter(b => {
+                const matchesSearch = b.title.toLowerCase().includes(query) || 
+                                      b.author.toLowerCase().includes(query) || 
+                                      (b.summary && b.summary.toLowerCase().includes(query)) ||
+                                      (b.thoughts && b.thoughts.toLowerCase().includes(query));
+                const matchesCat = (catFilter === 'all') || (b.category === catFilter);
+                return matchesSearch && matchesCat;
+            });
+            renderBookshelf(filtered);
+        }
+
+        // Dashboard Metrics Calculations & Render charts
+        function calculateAndRenderCharts(books) {
+            document.getElementById('statTotalBooks').innerText = books.length;
+            
+            let totalRating = 0;
+            const counts = { "非虚构认知": 0, "虚构小说": 0, "技术成长": 0, "搞钱研究": 0, "其他维度": 0 };
+            
+            books.forEach(b => {
+                totalRating += b.rating || 5;
+                if(counts[b.category] !== undefined) counts[b.category]++;
+                else counts["其他维度"]++;
+            });
+            
+            const avg = books.length > 0 ? (totalRating / books.length).toFixed(1) : "0.0";
+            document.getElementById('statAvgRating').innerText = avg;
+
+            // Chart JS Orchestration
+            const ctx = document.getElementById('categoryChart').getContext('2d');
+            if(categoryChartInstance) categoryChartInstance.destroy();
+
+            categoryChartInstance = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: Object.keys(counts),
+                    datasets: [{
+                        data: Object.values(counts),
+                        backgroundColor: [
+                            'rgba(99, 102, 241, 0.75)',  // indigo
+                            'rgba(168, 85, 247, 0.75)',  // purple
+                            'rgba(14, 165, 233, 0.75)',  // sky
+                            'rgba(245, 158, 11, 0.75)',  // amber
+                            'rgba(100, 116, 139, 0.75)'  // slate
+                        ],
+                        borderColor: 'rgba(3, 7, 18, 0.8)',
+                        borderWidth: 2
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'right',
+                            labels: {
+                                color: '#94a3b8',
+                                font: { size: 10, family: 'Noto Sans SC' },
+                                boxWidth: 10,
+                                padding: 8
+                            }
+                        }
+                    },
+                    cutout: '70%'
+                }
+            });
+        }
+
+        // Modal Operations For Book Processing
+        function openBookModal(id = null) {
+            const m = document.getElementById('bookModal');
+            document.getElementById('bookForm').reset();
+            setFormRating(5);
+            
+            if(id) {
+                document.getElementById('modalTitle').innerHTML = '<i data-lucide="edit-3" class="w-5 h-5 mr-2 text-indigo-400"></i>校准已有书籍资产';
+                const target = originalBooksCache.find(b => b.id === id);
+                if(target) {
+                    document.getElementById('bookId').value = target.id;
+                    document.getElementById('bookTitle').value = target.title;
+                    document.getElementById('bookAuthor').value = target.author;
+                    document.getElementById('bookCategory').value = target.category;
+                    setFormRating(target.rating || 5);
+                    document.getElementById('bookSummary').value = target.summary || '';
+                    document.getElementById('bookConcepts').value = target.concepts || '';
+                    document.getElementById('bookThoughts').value = target.thoughts || '';
+                    document.getElementById('bookActions').value = target.actions || '';
+                }
+            } else {
+                document.getElementById('modalTitle').innerHTML = '<i data-lucide="book-marked" class="w-5 h-5 mr-2 text-indigo-400"></i>搭载新书籍至星轴';
+                document.getElementById('bookId').value = '';
+            }
+            
+            adaptFormLabels();
+            m.classList.remove('invisible', 'opacity-0');
+            lucide.createIcons();
+        }
+
+        function closeBookModal() {
+            const m = document.getElementById('bookModal');
+            m.classList.add('invisible', 'opacity-0');
+        }
+
+        async function saveBook(e) {
+            e.preventDefault();
+            setProgressBar(30);
+            
+            const id = document.getElementById('bookId').value;
+            const title = document.getElementById('bookTitle').value.trim();
+            const author = document.getElementById('bookAuthor').value.trim();
+            const category = document.getElementById('bookCategory').value;
+            const rating = parseInt(document.getElementById('bookRating').value) || 5;
+            const summary = document.getElementById('bookSummary').value.trim();
+            const concepts = document.getElementById('bookConcepts').value.trim();
+            const thoughts = document.getElementById('bookThoughts').value.trim();
+            const actions = document.getElementById('bookActions').value.trim();
+
+            const payload = { title, author, category, rating, summary, concepts, thoughts, actions };
+
+            try {
+                if(id) {
+                    // Update Operation Row
+                    const { error } = await supabaseClient
+                        .from('books')
+                        .update(payload)
+                        .eq('id', id);
+                    if (error) throw error;
+                    showToast("书籍智理维度重塑完成", "success");
+                } else {
+                    // Insert New Row
+                    const { error } = await supabaseClient
+                        .from('books')
+                        .insert([payload]);
+                    if (error) throw error;
+                    showToast("新书籍资产成功搭载进入云星系", "success");
+                }
+                closeBookModal();
+                fetchBooksFromCloud();
+            } catch (err) {
+                showToast("存储失败，异常源: " + err.message, "error");
+            } finally {
+                setProgressBar(100);
+            }
+        }
+
+        async function deleteBookItem(id) {
+            if(!confirm("确定要将此书籍资产从云端永久湮灭吗？该操作不可逆。")) return;
+            setProgressBar(40);
+            try {
+                const { error } = await supabaseClient
+                    .from('books')
+                    .delete()
+                    .eq('id', id);
+                if (error) throw error;
+                showToast("节点删除成功，数据已在云端湮灭", "success");
+                fetchBooksFromCloud();
+            } catch (err) {
+                showToast("湮灭节点失败: " + err.message, "error");
+            } finally {
+                setProgressBar(100);
+            }
+        }
+
+        // GLM-4-Flash Model Deep AI Integration Module Network Layer
+        async function triggerAiAnalysis(id) {
+            const apiKey = localStorage.getItem('GLM_API_KEY');
+            const endpoint = localStorage.getItem('GLM_ENDPOINT') || 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
+            
+            if(!apiKey || !apiKey.startsWith('glm-')) {
+                showToast("分析终止：请先在右上方配置中心填入真实的智谱清言API Key", "error");
+                openSettingsModal();
+                return;
+            }
+
+            const target = originalBooksCache.find(b => b.id === id);
+            if(!target) return;
+
+            // Open Modal and display loading framework
+            document.getElementById('aiTargetTitle').innerText = target.title;
+            document.getElementById('aiTargetAuthor').innerText = `作者：${target.author}`;
+            document.getElementById('aiTargetCategory').innerText = target.category;
+            
+            document.getElementById('aiLoadingSkeleton').classList.remove('hidden');
+            document.getElementById('aiRealText').innerText = '';
+            
+            const aiModal = document.getElementById('aiAnalysisModal');
+            aiModal.classList.remove('invisible', 'opacity-0');
+
+            setProgressBar(20);
+
+            // Constructing Deep Prompt Sandbox Based On Dual Track Data
+            const isFiction = target.category === '虚构小说';
+            const promptContent = `
+你是一个顶级的跨领域全能AI智囊学者。请针对用户提供的一本${target.category}类别的阅读卡片，进行深度透视复盘与联网强化洞察。
+
+【已知书籍资产元数据】
+书籍名称：《${target.title}》
+作者：${target.author}
+分类维度：${target.category}
+用户给出的打分：${target.rating} 星
+
+【用户录入的沙盒数据】
+${isFiction ? '叙事梗概' : '全书主干逻辑'}：
+${target.summary || '未填写'}
+
+${isFiction ? '惊艳人物/世界观设定' : '关键精髓概念'}：
+${target.concepts || '未填写'}
+
+${isFiction ? '思想哲学隐喻内省' : '批判性思维内省'}：
+${target.thoughts || '未填写'}
+
+${isFiction ? '精神投射行动转换' : '破圈敏捷行动指南'}：
+${target.actions || '未填写'}
+
+【请按照以下严格的结构，给出穿透性复盘，字数控制在600字左右，保持高度精炼与认知密度】
+1. 🪐【多维视界拓展】结合全网最新知识沉淀，补充1个普通读者极易忽略的、关于此书的高阶隐藏背景或隐喻。
+2. ⚡【知行桥梁校准】针对用户填写的“内省与行动指南”，给出1个具体且极具操作性的破圈执行建议，把理性彻底变为习惯。
+3. 🔮【宇宙回响箴言】用一句话为这位读者的认知重塑过程进行高光赋能。
+`;
+
+            try {
+                setProgressBar(50);
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${apiKey}`
+                    },
+                    body: JSON.stringify({
+                        model: "glm-4-flash",
+                        messages: [
+                            {
+                                role: "system",
+                                content: "你是一个专门结合读者个人心得与全网最新洞察来进行深度书籍复盘的高阶智脑。请用专业、冷静但极具认知启发性的语气进行回答。"
+                            },
+                            {
+                                role: "user",
+                                content: promptContent
+                            }
+                        ],
+                        temperature: 0.7
+                    })
+                });
+
+                setProgressBar(80);
+                if(!response.ok) {
+                    const errData = await response.json().catch(() => ({}));
+                    throw new Error(errData.error?.message || `网络状态码非200: ${response.status}`);
+                }
+
+                const result = await response.json();
+                const textOutput = result.choices?.[0]?.message?.content;
+                
+                if(!textOutput) {
+                    throw new Error("模型未返回任何有效文本。请确认额度无误。");
+                }
+
+                // Inject results cleanly
+                document.getElementById('aiLoadingSkeleton').classList.add('hidden');
+                document.getElementById('aiRealText').innerText = textOutput;
+                showToast("联网透视复盘成功完成", "success");
+
+            } catch (err) {
+                document.getElementById('aiLoadingSkeleton').classList.add('hidden');
+                document.getElementById('aiRealText').innerHTML = `
+                    <div class="p-4 bg-rose-950/40 border border-rose-500/20 rounded-xl text-rose-300">
+                        <p class="font-bold">❌ 联网智能引擎调用发生中断</p>
+                        <p class="text-xs mt-1">错误描述：${err.message}</p>
+                        <p class="text-xs mt-2 text-slate-400">可能原因：1. API Key无效/额度用尽； 2. GitHub Pages静态部署可能遇到跨域限制，若遇到跨域，建议在配置中心配合中转代理URL使用。</p>
+                    </div>
+                `;
+                showToast("AI星脉分析阻断，请核对参数", "error");
+            } finally {
+                setProgressBar(100);
+            }
+        }
+
+        function closeAiModal() {
+            document.getElementById('aiAnalysisModal').classList.add('invisible', 'opacity-0');
+        }
+
+        // Security Escape Helper Utility
+        function escapeHtml(str) {
+            if(!str) return '';
+            return str.replace(/&/g, "&amp;")
+                      .replace(/</g, "&lt;")
+                      .replace(/>/g, "&gt;")
+                      .replace(/"/g, "&quot;")
+                      .replace(/'/g, "&#039;");
+        }
+    </script>
+</body>
+</html>
