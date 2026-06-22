@@ -1147,6 +1147,40 @@
     </div>
 
     <script>
+        // =============================
+// Supabase 初始化
+// =============================
+
+const SUPABASE_URL =
+'https://wyycauakphfsvkiypllh.supabase.co';
+
+const SUPABASE_ANON_KEY =
+'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind5eWNhdWFrcGhmc3ZraXlwbGxoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3MjE2MzMsImV4cCI6MjA5NzI5NzYzM30.-7WsBsPmI3uS25LtcZtIB2NUqq8olnw273ljGqNN64o';
+
+const supabaseClient =
+window.supabase.createClient(
+    SUPABASE_URL,
+    SUPABASE_ANON_KEY
+);
+
+console.log('Supabase Client Ready');
+
+(async () => {
+
+    const {
+        data,
+        error
+    } = await supabaseClient.auth.getSession();
+
+    console.log(
+        'Supabase Connection Test',
+        {
+            data,
+            error
+        }
+    );
+
+})();
         const SEED_BOOKS = [
             {
                 id: "seed-1", title: "人类简史", author: "尤瓦尔·赫拉利", category: "历史", rating: 5, timestamp: new Date(2026, 1, 15).getTime(),
