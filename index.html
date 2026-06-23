@@ -1346,26 +1346,30 @@ async function syncBooksToSupabase() {
 
         const { error } =
         await supabaseClient
-            .from('books')
-            .insert({
-                user_id: user.id,
+    .from('books')
+    .upsert({
 
-                title: book.title || '',
-                author: book.author || '',
-                category: book.category || '',
-                rating: book.rating || 0,
+        source_book_id:
+            book.id || crypto.randomUUID(),
 
-                summary: book.summary || '',
-                concepts: book.concepts || '',
-                thoughts: book.thoughts || '',
-                actions: book.actions || '',
+        user_id: user.id,
 
-                timestamp: book.timestamp || Date.now(),
+        title: book.title || '',
+        author: book.author || '',
+        category: book.category || '',
+        rating: book.rating || 0,
 
-                updated_at:
-                new Date().toISOString()
-            });
+        summary: book.summary || '',
+        concepts: book.concepts || '',
+        thoughts: book.thoughts || '',
+        actions: book.actions || '',
 
+        timestamp: book.timestamp || Date.now(),
+
+        updated_at:
+        new Date().toISOString()
+
+    });
         if (error) {
 
             console.error(
