@@ -1549,37 +1549,9 @@ async function loadBooksFromSupabase() {
 
         if (!loaded) {
 
-            const localData =
-            localStorage.getItem(
-                'reading_cosmos_data_store'
-            );
+            booksData =
+            [...SEED_BOOKS];
 
-            if (localData) {
-
-                try {
-
-                    booksData =
-                    JSON.parse(localData);
-
-                } catch(e) {
-
-                    booksData =
-                    [...SEED_BOOKS];
-
-                }
-
-            } else {
-
-                booksData =
-                [...SEED_BOOKS];
-
-                localStorage.setItem(
-                    'reading_cosmos_data_store',
-                    JSON.stringify(
-                        booksData
-                    )
-                );
-            }
         }
 
         initCosmosBg();
