@@ -2032,17 +2032,17 @@ async function showAIAnalysis() {
 
     const { error } =
     await supabaseClient
-    .from('ai_generations')
-    .insert({
+.from('ai_generations')
+.insert({
 
-        user_id:
-            user.id,
+    user_id:
+        user.id,
 
-        book_id:
-            book.id,
+    book_id:
+        null,
 
-        prompt:
-            promptText,
+    prompt:
+        promptText,
 
         result:
             resultText,
