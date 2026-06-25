@@ -998,14 +998,38 @@
             </div>
         </section>
 
-        <section id="view-insights" class="view-section">
+       <section id="view-insights" class="view-section">
+
+    <div style="
+        display:flex;
+        justify-content:space-between;
+        align-items:center;
+        margin-bottom:20px;
+    ">
+
+        <h2 style="
+            margin:0;
+            font-size:24px;
+        ">
+            📊 数据洞察
+        </h2>
+
+        <button
+            class="auth-btn"
+            onclick="reAnalyzeUniverse()"
+        >
+            🔄 AI重新分析阅读宇宙
+        </button>
+
+    </div>
+
+    <div class="insights-grid">
             <div class="insights-grid">
                 
                 <div class="insight-card">
                     <div class="ai-loading-mask"><div class="spinner"></div></div>
                     <div class="insight-title-row">
                         <div class="insight-title">🧠 阅读人格分析</div>
-                        <button class="btn-ai" onclick="refreshInsightCard(this, 'persona')">✦ AI 刷新</button>
                     </div>
                     <div id="insight-persona-box">
                         <h3 id="persona-title" style="font-size:1.15rem; margin-bottom:8px; color:#0f172a;">正在凝聚认知核心...</h3>
@@ -1017,7 +1041,6 @@
                     <div class="ai-loading-mask"><div class="spinner"></div></div>
                     <div class="insight-title-row">
                         <div class="insight-title">💡 认知特征焦点</div>
-                        <button class="btn-ai" onclick="refreshInsightCard(this, 'cognitive')">✦ AI 刷新</button>
                     </div>
                     <p id="insight-cognitive-desc" style="font-size:0.9rem; color:#334155; line-height:1.6;"></p>
                 </div>
@@ -1026,7 +1049,6 @@
                     <div class="ai-loading-mask"><div class="spinner"></div></div>
                     <div class="insight-title-row">
                         <div class="insight-title">🪐 图书分类星系构成</div>
-                        <button class="btn-ai" onclick="refreshInsightCard(this, 'galaxy')">✦ AI 刷新</button>
                     </div>
                     <div class="galaxy-chart-container">
                         <div class="svg-pie-wrapper">
@@ -1040,7 +1062,6 @@
                     <div class="ai-loading-mask"><div class="spinner"></div></div>
                     <div class="insight-title-row">
                         <div class="insight-title">📈 月度阅读成长演进</div>
-                        <button class="btn-ai" onclick="refreshInsightCard(this, 'trend')">✦ AI 刷新</button>
                     </div>
                     <div style="width:100%; height:140px;" id="trend-chart-box">
                         <svg width="100%" height="100%" id="trend-svg-element" preserveAspectRatio="none" style="overflow:visible;"></svg>
@@ -1051,7 +1072,6 @@
                     <div class="ai-loading-mask"><div class="spinner"></div></div>
                     <div class="insight-title-row">
                         <div class="insight-title">🚀 AI 智能延伸阅读路线</div>
-                        <button class="btn-ai" onclick="refreshInsightCard(this, 'route')">✦ AI 刷新</button>
                     </div>
                     <div class="route-timeline" id="route-timeline-box"></div>
                 </div>
@@ -1060,7 +1080,6 @@
                     <div class="ai-loading-mask"><div class="spinner"></div></div>
                     <div class="insight-title-row">
                         <div class="insight-title">✨ AI 年度宇宙阅读洞察报告</div>
-                        <button class="btn-ai" onclick="refreshInsightCard(this, 'report')">✦ AI 刷新</button>
                     </div>
                     <div class="report-grid-metrics">
                         <div class="metric-box"><div class="metric-val" id="metric-total">0</div><div class="metric-lbl">阅读总量</div></div>
