@@ -90,12 +90,55 @@
             font-weight: 400;
         }
 
-        .header-right {
-            display: flex;
-            flex-direction: column;
-            align-items: flex-end;
-            gap: 10px;
-        }
+        .header-right{
+
+    display:flex;
+
+    flex-direction:column;
+
+    align-items:flex-end;
+
+    gap:16px;
+
+}
+        .user-toolbar{
+
+    display:flex;
+
+    align-items:center;
+
+    gap:14px;
+
+}
+        .icon-btn{
+
+    width:36px;
+
+    height:36px;
+
+    border:none;
+
+    border-radius:10px;
+
+    background:#fff;
+
+    cursor:pointer;
+
+    font-size:18px;
+
+    transition:.2s;
+
+    box-shadow:0 2px 8px rgba(0,0,0,.06);
+
+}
+
+.icon-btn:hover{
+
+    transform:translateY(-1px);
+
+    box-shadow:0 6px 18px rgba(0,0,0,.12);
+
+}
 
         .universe-counter {
             display: inline-flex;
@@ -116,6 +159,8 @@
             background: rgba(15, 23, 42, 0.06);
             padding: 4px;
             border-radius: 24px;
+            gap:4px;          /* 新增 */
+            flex-wrap:nowrap; /* 新增 */
         }
 
         .nav-btn {
@@ -128,6 +173,7 @@
             border-radius: 20px;
             cursor: pointer;
             transition: all 0.2s ease;
+            white-space: nowrap;   /* ← 新增 */
         }
 
         .nav-btn.active {
@@ -924,45 +970,81 @@
 
     <canvas id="cosmos-bg-canvas"></canvas>
 
-    <header>
-        <div class="header-left">
-            <h1 class="brand-title">📚 我的阅读宇宙 Reading Cosmos</h1>
-            <div class="brand-subtitle">点亮每一颗思想星球，凝练自洽的认知史诗。</div>
-        </div>
-        <div class="header-right">
-            <div style="
-        display:flex;
-        align-items:center;
-        gap:12px;
-        justify-content:flex-end;
-        margin-bottom:10px;
-    ">
+   <header>
 
-        <div class="universe-counter" id="global-counter">
-    🌈 已探索 0 本书
-</div>
+    <div class="header-left">
 
-<div id="auth-area">
+        <h1 class="brand-title">
+            📚 我的阅读宇宙 Reading Cosmos
+        </h1>
 
-    <button class="auth-btn" onclick="showLogin()">
-        登录
-    </button>
-
-    <button class="auth-btn" onclick="showRegister()">
-        注册
-    </button>
-
-</div>
+        <div class="brand-subtitle">
+            点亮每一颗思想星球，凝练自洽的认知史诗。
         </div>
 
     </div>
-            <div class="nav-container">
-                <button class="nav-btn active" onclick="switchView('shelf')">书架模式</button>
-                <button class="nav-btn" onclick="switchView('cosmos')">阅读宇宙</button>
-                <button class="nav-btn" onclick="switchView('insights')">数据洞察</button>
+
+    <div class="header-right">
+
+        <!-- 第一行：账号工具栏 -->
+        <div class="user-toolbar">
+
+            <div id="auth-area">
+
+                <button class="auth-btn" onclick="showLogin()">
+                    登录
+                </button>
+
+                <button class="auth-btn" onclick="showRegister()">
+                    注册
+                </button>
+
             </div>
+
+            <button
+                class="icon-btn"
+                onclick="openSettings()"
+                title="设置">
+
+                ⚙️
+
+            </button>
+
         </div>
-    </header>
+
+        <!-- 第二行：导航 -->
+
+        <div class="nav-container">
+
+            <button
+                class="nav-btn active"
+                onclick="switchView('shelf')">
+
+                书架模式
+
+            </button>
+
+            <button
+                class="nav-btn"
+                onclick="switchView('cosmos')">
+
+                阅读宇宙
+
+            </button>
+
+            <button
+                class="nav-btn"
+                onclick="switchView('insights')">
+
+                数据洞察
+
+            </button>
+
+        </div>
+
+    </div>
+
+</header>
 
     <main>
         
