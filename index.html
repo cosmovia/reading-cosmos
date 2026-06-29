@@ -237,6 +237,21 @@
             grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
             gap: 32px 24px;
         }
+       .shelf-toolbar{
+
+    display:flex;
+
+    justify-content:space-between;
+
+    align-items:center;
+
+    margin-bottom:24px;
+
+    gap:16px;
+
+    flex-wrap:wrap;
+
+}
 
         .book-card {
             background: transparent;
@@ -1049,12 +1064,35 @@
     <main>
         
         <section id="view-shelf" class="view-section active">
-            <div class="shelf-control-bar">
-                <button class="btn-primary" onclick="openAddBookModal()">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="12" y2="12"></line></svg>
-                    新增书籍
-                </button>
-            </div>
+            <section id="view-shelf" class="view-section active">
+
+    <div class="shelf-toolbar">
+
+        <div
+            class="universe-counter"
+            id="global-counter">
+
+            🌈 已探索 0 本
+
+        </div>
+
+        <button
+            class="btn-primary"
+            onclick="openAddBookModal()">
+
+            ＋ 新增书籍
+
+        </button>
+
+    </div>
+
+    <div
+        class="shelf-grid"
+        id="shelf-books-container">
+
+    </div>
+
+</section>
             <div class="shelf-grid" id="shelf-books-container"></div>
         </section>
 
@@ -1788,13 +1826,17 @@ async function loadBooksFromSupabase() {
 }
 
         function updateGlobalCounter() {
-            document.getElementById('global-counter').innerText = `🌈 已探索 ${booksData.length} 本书`;
-        }
 
-        function getCategoryStyle(cat) {
-            return CATEGORY_MAP[cat] || { color: '#94a3b8', label: cat || '通用' };
-        }
+    const counter =
+        document.getElementById('global-counter');
 
+    // 如果页面没有这个元素，直接退出
+    if (!counter) return;
+
+    counter.innerText =
+        `🌈 已探索 ${booksData.length} 本`;
+
+}
         // 微光星空背景
         let bgCtx, bgCanvas, bgParticles = [];
         function initCosmosBg() {
