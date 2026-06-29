@@ -101,16 +101,28 @@
     gap:16px;
 
 }
-        .user-toolbar{
+        
+    .user-toolbar{
 
     display:flex;
 
     align-items:center;
 
-    gap:14px;
+    gap:12px;
 
 }
-        .icon-btn{
+
+.user-name{
+
+    font-size:15px;
+
+    font-weight:600;
+
+    color:#334155;
+
+}
+
+.icon-btn{
 
     width:36px;
 
@@ -120,11 +132,11 @@
 
     border-radius:10px;
 
-    background:#fff;
+    background:#ffffff;
 
     cursor:pointer;
 
-    font-size:18px;
+    font-size:17px;
 
     transition:.2s;
 
@@ -139,7 +151,6 @@
     box-shadow:0 6px 18px rgba(0,0,0,.12);
 
 }
-
         .universe-counter {
             display: inline-flex;
             align-items: center;
@@ -1500,6 +1511,7 @@ async function showSettings() {
 
     alert('设置保存成功');
 }
+        
 // =============================
 // 检查登录状态
 // =============================
@@ -1511,42 +1523,63 @@ async function checkLoginStatus() {
     } = await supabaseClient.auth.getUser();
 
     const authArea =
-    document.getElementById('auth-area');
+        document.getElementById("auth-area");
 
     if (!authArea) return;
 
     if (user) {
 
+        // 读取用户设置
+        const { data: settings } =
+            await supabaseClient
+                .from("user_settings")
+                .select("display_name")
+                .eq("user_id", user.id)
+                .single();
+
+        const displayName =
+            settings?.display_name || "旅行者";
+
         authArea.innerHTML = `
-    <button onclick="showSettings()">
-        ⚙️ 设置
-    </button>
+            <div class="user-toolbar">
 
-    <span style="
-        font-size:12px;
-        color:#666;
-    ">
-        👤 ${user.email}
-    </span>
+                <span
+                    class="user-name"
+                    title="${user.email}">
+                    🌌 ${displayName}
+                </span>
 
-    <button onclick="logoutUser()">
-        退出
-    </button>
-`;
+                <button
+                    class="icon-btn"
+                    onclick="showSettings()"
+                    title="设置">
+                    ⚙️
+                </button>
+
+                <button
+                    class="icon-btn"
+                    onclick="logoutUser()"
+                    title="退出登录">
+                    ⎋
+                </button>
+
+            </div>
+        `;
 
     } else {
 
         authArea.innerHTML = `
-            <button onclick="showLogin()">
+            <button class="auth-btn" onclick="showLogin()">
                 登录
             </button>
 
-            <button onclick="showRegister()">
+            <button class="auth-btn" onclick="showRegister()">
                 注册
             </button>
         `;
     }
 }
+        
 // =============================
 // 同步全部书籍到Supabase
 // =============================
