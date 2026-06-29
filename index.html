@@ -1907,7 +1907,29 @@ function getCategoryStyle(cat) {
 
     document.getElementById(`view-${viewName}`)
         .classList.add('active');
+function createProceduralCover(title, author, category) {
 
+    const style = getCategoryStyle(category);
+
+    return `
+        <div class="book-cover-fallback"
+             style="background:linear-gradient(135deg, ${style.color}cc 0%, ${style.color}ff 100%);">
+
+            <div class="fallback-decor-circle"></div>
+
+            <div class="fallback-title">
+                ${title || "未命名"}
+            </div>
+
+            <div class="fallback-author">
+                ${author || "佚名"}
+            </div>
+
+        </div>
+    `;
+
+}
+            
     // ===== 新增 =====
     if (viewName === 'shelf') {
 
