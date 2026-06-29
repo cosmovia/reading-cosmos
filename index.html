@@ -1888,7 +1888,7 @@ function getCategoryStyle(cat) {
         }
 
         // 导航切换
-        function switchView(viewName) {
+       function switchView(viewName) {
 
     currentView = viewName;
 
@@ -1899,7 +1899,7 @@ function getCategoryStyle(cat) {
         .forEach(sec => sec.classList.remove('active'));
 
     const targetBtnIndex =
-        ['shelf', 'cosmos', 'insights']
+        ['shelf','cosmos','insights']
         .indexOf(viewName);
 
     document.querySelectorAll('.nav-btn')[targetBtnIndex]
@@ -1907,7 +1907,33 @@ function getCategoryStyle(cat) {
 
     document.getElementById(`view-${viewName}`)
         .classList.add('active');
-function createProceduralCover(title, author, category) {
+
+    // ===== 新增 =====
+    if(viewName === 'shelf'){
+
+        updateGlobalCounter();
+
+        renderShelfView();
+
+    }
+
+    // ===== 原来的 =====
+    else if(viewName === 'cosmos'){
+
+        resizeCosmosCanvas();
+
+        rebuildUniversePlanets();
+
+    }
+
+    else if(viewName === 'insights'){
+
+        renderDataInsights();
+
+    }
+
+}
+        function createProceduralCover(title, author, category) {
 
     const style = getCategoryStyle(category);
 
@@ -1927,32 +1953,6 @@ function createProceduralCover(title, author, category) {
 
         </div>
     `;
-
-}
-            
-    // ===== 新增 =====
-    if (viewName === 'shelf') {
-
-        updateGlobalCounter();
-
-        renderShelfView();
-
-    }
-
-    // ===== 原来的 =====
-    else if (viewName === 'cosmos') {
-
-        resizeCosmosCanvas();
-
-        rebuildUniversePlanets();
-
-    }
-
-    else if (viewName === 'insights') {
-
-        renderDataInsights();
-
-    }
 
 }
         
