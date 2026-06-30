@@ -299,26 +299,65 @@
             margin-bottom: 24px;
         }
 
-        .btn-primary {
-            background: #0f172a;
-            color: #ffffff;
-            border: none;
-            padding: 10px 20px;
-            font-size: 0.9rem;
-            font-weight: 500;
-            border-radius: 12px;
-            cursor: pointer;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            transition: all 0.2s ease;
-        }
+        .btn-primary{
 
-        .btn-primary:hover {
-            background: #1e293b;
-            transform: translateY(-1px);
-        }
+    height:40px;
 
+    padding:0 18px;
+
+    display:inline-flex;
+
+    align-items:center;
+
+    justify-content:center;
+
+    gap:8px;
+
+    background:#0f172a;
+
+    color:#ffffff;
+
+    border:none;
+
+    border-radius:12px;
+
+    font-size:15px;
+
+    font-weight:600;
+
+    line-height:1;
+
+    cursor:pointer;
+
+    transition:
+        background .2s,
+        transform .18s,
+        box-shadow .2s;
+
+    box-shadow:
+        0 2px 8px rgba(15,23,42,.08);
+
+}
+
+.btn-primary:hover{
+
+    background:#1e293b;
+
+    transform:translateY(-1px);
+
+    box-shadow:
+        0 8px 20px rgba(15,23,42,.14);
+
+}
+
+.btn-primary:active{
+
+    transform:translateY(0);
+
+    box-shadow:
+        0 2px 6px rgba(15,23,42,.08);
+
+}
         .shelf-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
