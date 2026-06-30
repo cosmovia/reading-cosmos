@@ -208,6 +208,25 @@
     color:#dc2626;
 
 }
+        .insights-toolbar{
+
+    display:flex;
+
+    justify-content:flex-end;
+
+    align-items:center;
+
+    margin-bottom:26px;
+
+}
+
+.insights-actions{
+
+    display:flex;
+
+    gap:10px;
+
+}
         .universe-counter {
             display: inline-flex;
             align-items: center;
@@ -1175,27 +1194,36 @@
         </section>
 
        <section id="view-insights" class="view-section">
+<div class="insights-toolbar">
 
-    <div style="
-        display:flex;
-        justify-content:space-between;
-        align-items:center;
-        margin-bottom:20px;
-    ">
+<div class="insights-actions">
 
-        <h2 style="
-            margin:0;
-            font-size:24px;
-        ">
-            📊 数据洞察
-        </h2>
+    <button
+        class="toolbar-btn"
+        onclick="reAnalyzeUniverse()">
 
-        <button
-            class="auth-btn"
-            onclick="reAnalyzeUniverse()"
-        >
-            🔄 AI重新分析阅读宇宙
-        </button>
+        🔄
+        <span>AI重新分析</span>
+
+    </button>
+
+    <button
+        class="toolbar-btn">
+
+        📄
+        <span>导出报告</span>
+
+    </button>
+
+    <button
+        class="toolbar-btn">
+
+        🔗
+        <span>分享</span>
+
+    </button>
+
+</div>
 
     </div>
 
