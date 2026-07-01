@@ -134,7 +134,7 @@ Reading Cosmos 不只是一本读书记录本。
 
 **Author**
 
-王欣然 × ChatGPT
+CosmosLab × ChatGPT
 
 **Version**
 
