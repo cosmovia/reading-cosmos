@@ -1634,7 +1634,7 @@ async function showRegister() {
 
     if (!password) return;
 
-    const { error } =
+    const { data, error } =
     await supabaseClient.auth.signUp({
         email,
         password
@@ -1647,9 +1647,14 @@ async function showRegister() {
         return;
     }
 
-    alert("注册成功");
-
-    await checkLoginStatus();
+    if (data.session && data.user) {
+        await activateAuthenticatedShelf(data.user);
+        alert("注册成功，你的书架现在是空的");
+    } else {
+        showGuestShelf();
+        await checkLoginStatus();
+        alert("注册成功，请完成邮箱验证后登录");
+    }
 }
 
 // =============================
@@ -1666,7 +1671,7 @@ async function showLogin() {
 
     if (!password) return;
 
-    const { error } =
+    const { data, error } =
     await supabaseClient.auth.signInWithPassword({
         email,
         password
@@ -1681,15 +1686,7 @@ async function showLogin() {
 
     alert("登录成功");
 
-    await checkLoginStatus();
-
-    await loadBooksFromSupabase();
-
-    updateGlobalCounter();
-
-    renderShelfView();
-
-    renderDataInsights();
+    await activateAuthenticatedShelf(data.user);
 }
 // =============================
 // 退出
@@ -1699,14 +1696,7 @@ async function logoutUser() {
 
     await supabaseClient.auth.signOut();
 
-    booksData = [...SEED_BOOKS];
-
-    updateGlobalCounter();
-
-    renderShelfView();
-
-    renderDataInsights();
-
+    showGuestShelf();
     await checkLoginStatus();
 }
 
@@ -1793,6 +1783,8 @@ async function checkLoginStatus() {
 
     if (!authArea) return;
 
+    currentUser = user || null;
+
     if (user) {
 
         // 读取用户设置
@@ -1801,7 +1793,7 @@ async function checkLoginStatus() {
                 .from("user_settings")
                 .select("display_name")
                 .eq("user_id", user.id)
-                .single();
+                .maybeSingle();
 
         const displayName =
             settings?.display_name || "旅行者";
@@ -1918,21 +1910,16 @@ ${displayName}
 // =============================
 
 async function syncBooksToSupabase() {
+    const user = currentUser;
 
-    const {
-        data: { user }
-    } = await supabaseClient.auth.getUser();
-
-    if (!user) {
-
-        alert('请先登录');
-
-        return;
-    }
+    if (!user) return false;
 
     console.log('开始同步书籍...');
 
-    for (const book of booksData) {
+    const userBooks =
+        booksData.filter(book => !book.isDemo);
+
+    for (const book of userBooks) {
 
         const { error } =
        await supabaseClient
@@ -1982,17 +1969,14 @@ async function syncBooksToSupabase() {
             );
         }
     }
-   
+
+    return true;
 }
 // =============================
 // 从Supabase加载书籍
 // =============================
 
-async function loadBooksFromSupabase() {
-
-    const {
-        data: { user }
-    } = await supabaseClient.auth.getUser();
+async function loadBooksFromSupabase(user = currentUser) {
 
     if (!user) {
 
@@ -2051,7 +2035,13 @@ async function loadBooksFromSupabase() {
             book.thoughts || '',
 
         actions:
-            book.actions || ''
+            book.actions || '',
+
+        coverUrl:
+            book.cover_url || '',
+
+        noteMethod:
+            book.note_method || null
 
     }));
 
@@ -2110,9 +2100,66 @@ async function loadBooksFromSupabase() {
         ];
 
         let booksData = [];
+        let currentUser = null;
         let currentView = 'shelf';
         let activeBookId = null;
         let isEditing = false;
+
+        function createDemoBooks() {
+            return SEED_BOOKS.map(book => ({
+                ...book,
+                isDemo: true
+            }));
+        }
+
+        function refreshApplicationData() {
+            updateGlobalCounter();
+            renderShelfView();
+            renderDataInsights();
+
+            if (currentView === 'cosmos') {
+                rebuildUniversePlanets();
+            }
+        }
+
+        function showGuestShelf() {
+            currentUser = null;
+            activeBookId = null;
+            isEditing = false;
+            booksData = createDemoBooks();
+            refreshApplicationData();
+        }
+
+        async function activateAuthenticatedShelf(user) {
+            currentUser = user || null;
+            activeBookId = null;
+            isEditing = false;
+
+            if (!currentUser) {
+                showGuestShelf();
+                await checkLoginStatus();
+                return false;
+            }
+
+            const loaded =
+                await loadBooksFromSupabase(currentUser);
+
+            if (!loaded) {
+                booksData = [];
+                alert('云端书架读取失败，请稍后重试');
+            }
+
+            await checkLoginStatus();
+            refreshApplicationData();
+            return loaded;
+        }
+
+        function requireAuthenticatedUser() {
+            if (currentUser) return true;
+
+            alert('示例书架仅供浏览，请先登录或注册后管理自己的书籍');
+            return false;
+        }
 
         let cosmosState = {
             scale: 1.0, offsetX: 0, offsetY: 0, isDragging: false, startX: 0, startY: 0,
@@ -2144,14 +2191,19 @@ function getCategoryStyle(cat) {
     'DOMContentLoaded',
     async () => {
 
-        const loaded =
-        await loadBooksFromSupabase();
+        const {
+            data: { user }
+        } = await supabaseClient.auth.getUser();
 
-        if (!loaded) {
+        currentUser = user || null;
 
-            booksData =
-            [...SEED_BOOKS];
+        if (currentUser) {
+            const loaded =
+                await loadBooksFromSupabase(currentUser);
 
+            if (!loaded) booksData = [];
+        } else {
+            booksData = createDemoBooks();
         }
 
         initCosmosBg();
@@ -2180,20 +2232,17 @@ function getCategoryStyle(cat) {
 
         async function saveToLocalStorage() {
 
+    if (!currentUser) return false;
+
     localStorage.setItem(
-        'reading_cosmos_data_store',
-        JSON.stringify(booksData)
+        `reading_cosmos_data_store:${currentUser.id}`,
+        JSON.stringify(
+            booksData.filter(book => !book.isDemo)
+        )
     );
 
-    const {
-        data: { user }
-    } = await supabaseClient.auth.getUser();
-
-    if (user) {
-
-        await syncBooksToSupabase();
-
-    }
+    await syncBooksToSupabase();
+    return true;
 }
 
         function updateGlobalCounter() {
@@ -2328,12 +2377,15 @@ function getCategoryStyle(cat) {
                 
                 const coverHtml = createProceduralCover(book.title, book.author, book.category);
                 const stars = '★'.repeat(book.rating || 0) + '☆'.repeat(5 - (book.rating || 0));
-                
-                card.innerHTML = `
+                const cardActions = currentUser ? `
                     <div class="card-actions">
                         <div class="action-icon-btn btn-card-edit" onclick="inlineEditBook('${book.id}', event)" title="快速编辑">✏️</div>
                         <div class="action-icon-btn btn-card-delete" onclick="inlineDeleteBook('${book.id}', event)" title="从宇宙中抹除">🗑️</div>
                     </div>
+                ` : '';
+
+                card.innerHTML = `
+                    ${cardActions}
                     <div class="book-cover-wrapper">${coverHtml}</div>
                     <div class="book-meta">
                         <div class="tag-row">
@@ -2348,21 +2400,39 @@ function getCategoryStyle(cat) {
 
         function inlineEditBook(id, e) {
             e.stopPropagation();
+            if (!requireAuthenticatedUser()) return;
             openBookDetailPanel(id);
             if(!isEditing) toggleEditMode();
         }
 
-        function inlineDeleteBook(id, e) {
+        async function inlineDeleteBook(id, e) {
             e.stopPropagation();
+            if (!requireAuthenticatedUser()) return;
+
             if(confirm("确定要让这颗思想星球从你的宇宙中消失吗？")) {
+                const { error } = await supabaseClient
+                    .from('books')
+                    .delete()
+                    .eq('user_id', currentUser.id)
+                    .eq('source_book_id', id);
+
+                if (error) {
+                    console.error('删除图书失败', error);
+                    alert('云端删除失败，请稍后重试');
+                    return;
+                }
+
                 booksData = booksData.filter(b => b.id !== id);
-                saveToLocalStorage();
-                updateGlobalCounter();
-                renderShelfView();
+                localStorage.setItem(
+                    `reading_cosmos_data_store:${currentUser.id}`,
+                    JSON.stringify(booksData)
+                );
+                refreshApplicationData();
             }
         }
 
         function openAddBookModal() {
+            if (!requireAuthenticatedUser()) return;
             document.getElementById('input-book-title').value = '';
             document.getElementById('input-book-author').value = '';
             document.getElementById('input-book-category').value = '';
@@ -2373,6 +2443,7 @@ function getCategoryStyle(cat) {
         }
 
         function submitAddBook() {
+            if (!requireAuthenticatedUser()) return;
             const title = document.getElementById('input-book-title').value.trim();
             const author = document.getElementById('input-book-author').value.trim();
             let category = document.getElementById('input-book-category').value.trim();
@@ -2399,7 +2470,20 @@ function getCategoryStyle(cat) {
             activeBookId = id;
             const book = booksData.find(b => b.id === id);
             if(!book) return;
-            isEditing = false; 
+            isEditing = false;
+
+            const detailEditButton =
+                document.getElementById('detail-master-edit-btn');
+
+            detailEditButton.style.display =
+                currentUser ? 'flex' : 'none';
+
+            document
+                .querySelectorAll('#book-detail-overlay .btn-ai')
+                .forEach(button => {
+                    button.style.display =
+                        currentUser ? '' : 'none';
+                });
 
             // 1. 根据图书类型，自适应转换模块文本名称与小标题提示内容
             const isNovel = (book.category === '小说');
@@ -2445,6 +2529,7 @@ function getCategoryStyle(cat) {
             const stars = document.querySelectorAll('#detail-stars-interactive span');
             stars.forEach(star => {
                 star.onclick = () => {
+                    if (!requireAuthenticatedUser()) return;
                     const val = parseInt(star.getAttribute('data-value'));
                     book.rating = val; saveToLocalStorage();
                     updateInteractiveStarsUI(val); renderShelfView();
@@ -2501,15 +2586,21 @@ function getCategoryStyle(cat) {
             }
         }
         
-        function toggleEditMode() { isEditing = !isEditing; updateDetailModeUI(); }
-        
+        function toggleEditMode() {
+            if (!requireAuthenticatedUser()) return;
+            isEditing = !isEditing;
+            updateDetailModeUI();
+        }
+
         function autoSaveCurrentBookField(f) {
+            if (!currentUser) return;
             if(!activeBookId) return;
             const book = booksData.find(b => b.id === activeBookId);
             if(book) { book[f] = document.getElementById(`mod-${f}-input`).value; saveToLocalStorage(); }
         }
 
         function triggerModuleAI(field, op) {
+            if (!requireAuthenticatedUser()) return;
             if(!activeBookId) return;
             const book = booksData.find(b => b.id === activeBookId);
             const mask = document.getElementById(`mod-${field}-text`).closest('.detail-module').querySelector('.ai-loading-mask');
@@ -2696,7 +2787,20 @@ function reAnalyzeUniverse() {
 
         // ================= 数据洞察引擎 =================
         function renderDataInsights() {
-            if(booksData.length === 0) return;
+            if(booksData.length === 0) {
+                document.getElementById('metric-total').innerText = '0';
+                document.getElementById('metric-top-cat').innerText = '-';
+                document.getElementById('metric-high-rating').innerText = '0';
+                document.getElementById('persona-title').innerText = '🧠 你的阅读人格正在等待形成';
+                document.getElementById('persona-desc').innerText = '添加第一本书并记录自己的思考后，这里会逐步呈现你的阅读特征。';
+                document.getElementById('insight-cognitive-desc').innerText = '当前还没有足够的阅读数据。';
+                document.getElementById('pie-svg-element').innerHTML = '';
+                document.getElementById('pie-legends-box').innerHTML = '';
+                document.getElementById('trend-svg-element').innerHTML = '';
+                document.getElementById('route-timeline-box').innerHTML = '';
+                document.getElementById('report-ceremony-text').innerText = '从第一本书开始，构筑属于你的阅读宇宙。';
+                return;
+            }
             const total = booksData.length;
             const counts = {}; let highs = 0;
             booksData.forEach(b => { counts[b.category] = (counts[b.category] || 0) + 1; if(b.rating >= 5) highs++; });
