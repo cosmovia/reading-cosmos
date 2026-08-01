@@ -771,6 +771,33 @@
             white-space: pre-wrap;
         }
 
+        .ai-output-panel {
+            display: none;
+            margin-top: 14px;
+            padding: 14px;
+            border: 1px solid rgba(14, 165, 233, 0.22);
+            border-radius: 10px;
+            background: #f0f9ff;
+        }
+
+        .ai-output-panel.active {
+            display: block;
+        }
+
+        .ai-output-label {
+            margin-bottom: 8px;
+            color: #0369a1;
+            font-size: 0.75rem;
+            font-weight: 700;
+        }
+
+        .ai-output-content {
+            color: #334155;
+            font-size: 0.9rem;
+            line-height: 1.6;
+            white-space: pre-wrap;
+        }
+
         .module-textarea {
             width: 100%;
             background: #ffffff;
@@ -838,6 +865,21 @@
             padding: 10px 12px;
             color: var(--text-primary);
             font-size: 0.95rem;
+        }
+
+        .note-method-select {
+            width: 100%;
+            padding: 9px 10px;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            background: #ffffff;
+            color: #334155;
+            font-size: 0.85rem;
+        }
+
+        .detail-note-method {
+            width: 100%;
+            margin-bottom: 20px;
         }
 
         .modal-buttons {
@@ -1501,6 +1543,13 @@
                 <label for="input-book-category">类别 *</label>
                 <input type="text" id="input-book-category" class="form-input" placeholder="例如：小说、历史、哲学、商业等">
             </div>
+            <div class="form-group">
+                <label for="input-note-method">阅读笔记方法 *</label>
+                <select id="input-note-method" class="note-method-select">
+                    <option value="first_principles">First Principles · 第一性原理阅读</option>
+                    <option value="rat">R-A-T · 共鸣、提炼、转化</option>
+                </select>
+            </div>
             <div class="modal-buttons">
                 <button class="btn-secondary" onclick="closeAddBookModal()" style="background:#f1f5f9; border:none; padding:10px 16px; border-radius:8px; cursor:pointer;">取消</button>
                 <button class="btn-primary" onclick="submitAddBook()">启动构筑</button>
@@ -1533,6 +1582,16 @@
                 <h2 class="detail-title" id="detail-title-slot">书名</h2>
                 <div class="detail-author" id="detail-author-slot">作者</div>
                 <div class="detail-category-badge" id="detail-cat-slot">分类</div>
+                <div class="detail-note-method">
+                    <label class="rating-label" for="detail-note-method-select">阅读笔记方法</label>
+                    <select
+                        id="detail-note-method-select"
+                        class="note-method-select"
+                        onchange="updateCurrentBookNoteMethod(this.value)">
+                        <option value="first_principles">First Principles · 第一性原理阅读</option>
+                        <option value="rat">R-A-T · 共鸣、提炼、转化</option>
+                    </select>
+                </div>
                 <div class="detail-rating-select-box">
                     <span class="rating-label">我的主观评分</span>
                     <div class="star-rating-interactive" id="detail-stars-interactive">
@@ -1545,12 +1604,16 @@
                 <div class="detail-module">
                     <div class="ai-loading-mask"><div class="spinner"></div></div>
                     <div class="module-header">
-                        <span class="module-title-absolute" id="mod-summary-title">内容概要 (AI生成)</span>
+                        <span class="module-title-absolute" id="mod-summary-title">内容概要</span>
                         <div class="ai-btn-group">
-                            <button class="btn-ai" onclick="triggerModuleAI('summary', 'regenerate')">✦ 重新生成</button>
+                            <button class="btn-ai" onclick="triggerModuleAI('summary', 'regenerate')">✦ AI 独立建议</button>
                         </div>
                     </div>
                     <div class="module-content-text" id="mod-summary-text"></div>
+                    <div class="ai-output-panel" id="mod-summary-ai-output">
+                        <div class="ai-output-label" id="mod-summary-ai-label">AI 思考建议 · 独立保存</div>
+                        <div class="ai-output-content" id="mod-summary-ai-content"></div>
+                    </div>
                 </div>
 
                 <div class="detail-module">
@@ -1558,14 +1621,18 @@
                     <div class="module-header">
                         <span class="module-title-absolute" id="mod-concepts-title">主要人物 / 关键概念解析</span>
                         <div class="ai-btn-group">
-                            <button class="btn-ai edit-only-btn" style="display:none;" onclick="triggerModuleAI('concepts', 'generate')">✦ AI生成</button>
-                            <button class="btn-ai edit-only-btn" style="display:none;" onclick="triggerModuleAI('concepts', 'polish')">✦ AI润色</button>
+                            <button class="btn-ai edit-only-btn" style="display:none;" onclick="triggerModuleAI('concepts', 'generate')">✦ 补充视角</button>
+                            <button class="btn-ai edit-only-btn" style="display:none;" onclick="triggerModuleAI('concepts', 'polish')">✦ 修改建议</button>
                         </div>
                     </div>
                     <div class="module-subtitle-explanation" id="mod-concepts-explanation"></div>
                     <div class="ai-tip-banner edit-only-btn" style="display:none;">💡 建议先写下自己的理解，再使用AI辅助完善。</div>
                     <div class="module-content-text" id="mod-concepts-text"></div>
                     <textarea class="module-textarea" id="mod-concepts-input" oninput="autoSaveCurrentBookField('concepts')"></textarea>
+                    <div class="ai-output-panel" id="mod-concepts-ai-output">
+                        <div class="ai-output-label" id="mod-concepts-ai-label">AI 思考建议 · 不会覆盖你的笔记</div>
+                        <div class="ai-output-content" id="mod-concepts-ai-content"></div>
+                    </div>
                 </div>
 
                 <div class="detail-module">
@@ -1573,14 +1640,18 @@
                     <div class="module-header">
                         <span class="module-title-absolute" id="mod-thoughts-title">3个核心思想 / 金句感悟</span>
                         <div class="ai-btn-group">
-                            <button class="btn-ai edit-only-btn" style="display:none;" onclick="triggerModuleAI('thoughts', 'generate')">✦ AI生成</button>
-                            <button class="btn-ai edit-only-btn" style="display:none;" onclick="triggerModuleAI('thoughts', 'polish')">✦ AI润色</button>
+                            <button class="btn-ai edit-only-btn" style="display:none;" onclick="triggerModuleAI('thoughts', 'generate')">✦ 补充视角</button>
+                            <button class="btn-ai edit-only-btn" style="display:none;" onclick="triggerModuleAI('thoughts', 'polish')">✦ 修改建议</button>
                         </div>
                     </div>
                     <div class="module-subtitle-explanation" id="mod-thoughts-explanation"></div>
                     <div class="ai-tip-banner edit-only-btn" style="display:none;">💡 建议先写下自己的理解，再使用AI辅助完善。</div>
                     <div class="module-content-text" id="mod-thoughts-text"></div>
                     <textarea class="module-textarea" id="mod-thoughts-input" oninput="autoSaveCurrentBookField('thoughts')"></textarea>
+                    <div class="ai-output-panel" id="mod-thoughts-ai-output">
+                        <div class="ai-output-label" id="mod-thoughts-ai-label">AI 思考建议 · 不会覆盖你的笔记</div>
+                        <div class="ai-output-content" id="mod-thoughts-ai-content"></div>
+                    </div>
                 </div>
 
                 <div class="detail-module">
@@ -1588,14 +1659,18 @@
                     <div class="module-header">
                         <span class="module-title-absolute" id="mod-actions-title">启发 / 行动建议</span>
                         <div class="ai-btn-group">
-                            <button class="btn-ai edit-only-btn" style="display:none;" onclick="triggerModuleAI('actions', 'generate')">✦ AI生成</button>
-                            <button class="btn-ai edit-only-btn" style="display:none;" onclick="triggerModuleAI('actions', 'polish')">✦ AI润色</button>
+                            <button class="btn-ai edit-only-btn" style="display:none;" onclick="triggerModuleAI('actions', 'generate')">✦ 补充视角</button>
+                            <button class="btn-ai edit-only-btn" style="display:none;" onclick="triggerModuleAI('actions', 'polish')">✦ 修改建议</button>
                         </div>
                     </div>
                     <div class="module-subtitle-explanation" id="mod-actions-explanation"></div>
                     <div class="ai-tip-banner edit-only-btn" style="display:none;">💡 建议先写下自己的理解，再使用AI辅助完善。</div>
                     <div class="module-content-text" id="mod-actions-text"></div>
                     <textarea class="module-textarea" id="mod-actions-input" oninput="autoSaveCurrentBookField('actions')"></textarea>
+                    <div class="ai-output-panel" id="mod-actions-ai-output">
+                        <div class="ai-output-label" id="mod-actions-ai-label">AI 思考建议 · 不会覆盖你的笔记</div>
+                        <div class="ai-output-content" id="mod-actions-ai-content"></div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1943,6 +2018,12 @@ async function syncBooksToSupabase() {
             actions: book.actions || '',
 
             timestamp: book.timestamp || Date.now(),
+            note_method:
+                normalizeNoteMethod(book.noteMethod, book.category),
+            notes_revision:
+                Number(book.notesRevision || 0),
+            ai_data:
+                book.aiData || {},
 
             updated_at:
                 new Date().toISOString()
@@ -2041,7 +2122,19 @@ async function loadBooksFromSupabase(user = currentUser) {
             book.cover_url || '',
 
         noteMethod:
-            book.note_method || null
+            normalizeNoteMethod(
+                book.note_method,
+                book.category
+            ),
+
+        notesRevision:
+            Number(book.notes_revision || 0),
+
+        aiData:
+            book.ai_data &&
+            typeof book.ai_data === 'object'
+                ? book.ai_data
+                : {}
 
     }));
 
@@ -2104,10 +2197,93 @@ async function loadBooksFromSupabase(user = currentUser) {
         let currentView = 'shelf';
         let activeBookId = null;
         let isEditing = false;
+        let pendingNoteSaveTimer = null;
+        let pendingNoteBookId = null;
+
+        const NOTE_METHODS = {
+            first_principles: {
+                conceptsTitle: 'WHAT · 核心问题',
+                thoughtsTitle: 'WITH WHAT · 核心概念 / 工具',
+                actionsTitle: 'WHY · 底层原理',
+                conceptsHelp: '🧠 <b>向导提示：</b>这本书试图解决什么问题？它挑战了哪些流行误解？',
+                thoughtsHelp: '🧭 <b>向导提示：</b>作者提供了哪些概念、模型、框架或工具？它们如何协作？',
+                actionsHelp: '🔮 <b>向导提示：</b>这些方法为什么有效？背后的第一性原理是什么？'
+            },
+            rat: {
+                conceptsTitle: 'R · Resonate 共鸣',
+                thoughtsTitle: 'A · Abstract 提炼',
+                actionsTitle: 'T · Transform 转化',
+                conceptsHelp: '💫 <b>向导提示：</b>谁或什么触动了我？记录人物、情节、概念或瞬间。',
+                thoughtsHelp: '🪞 <b>向导提示：</b>它揭示了什么值得长期保留的普遍思想？',
+                actionsHelp: '🌱 <b>向导提示：</b>这次阅读如何改变了我？我准备采取什么行动？'
+            }
+        };
+
+        function normalizeNoteMethod(noteMethod, category = '') {
+            if (NOTE_METHODS[noteMethod]) return noteMethod;
+            return category === '小说' ? 'rat' : 'first_principles';
+        }
+
+        function applyNoteMethodUI(book) {
+            const method =
+                normalizeNoteMethod(
+                    book.noteMethod,
+                    book.category
+                );
+            const config = NOTE_METHODS[method];
+
+            document.getElementById('mod-concepts-title').innerText =
+                config.conceptsTitle;
+            document.getElementById('mod-thoughts-title').innerText =
+                config.thoughtsTitle;
+            document.getElementById('mod-actions-title').innerText =
+                config.actionsTitle;
+
+            document.getElementById('mod-concepts-explanation').innerHTML =
+                config.conceptsHelp;
+            document.getElementById('mod-thoughts-explanation').innerHTML =
+                config.thoughtsHelp;
+            document.getElementById('mod-actions-explanation').innerHTML =
+                config.actionsHelp;
+        }
+
+        function renderAIOutput(
+            field,
+            aiEntry,
+            currentNotesRevision = 0
+        ) {
+            const panel =
+                document.getElementById(`mod-${field}-ai-output`);
+            const content =
+                document.getElementById(`mod-${field}-ai-content`);
+            const label =
+                document.getElementById(`mod-${field}-ai-label`);
+
+            const text =
+                typeof aiEntry === 'string'
+                    ? aiEntry
+                    : aiEntry?.content || '';
+
+            content.innerText = text;
+            const aiRevision =
+                Number(aiEntry?.notesRevision || 0);
+            const isStale =
+                Boolean(text) &&
+                aiRevision < Number(currentNotesRevision || 0);
+
+            label.innerText = isStale
+                ? 'AI 思考建议 · 基于旧版本笔记'
+                : 'AI 思考建议 · 独立保存，不会覆盖你的笔记';
+            panel.classList.toggle('active', Boolean(text));
+        }
 
         function createDemoBooks() {
             return SEED_BOOKS.map(book => ({
                 ...book,
+                noteMethod:
+                    normalizeNoteMethod(null, book.category),
+                notesRevision: 0,
+                aiData: {},
                 isDemo: true
             }));
         }
@@ -2436,6 +2612,8 @@ function getCategoryStyle(cat) {
             document.getElementById('input-book-title').value = '';
             document.getElementById('input-book-author').value = '';
             document.getElementById('input-book-category').value = '';
+            document.getElementById('input-note-method').value =
+                'first_principles';
             document.getElementById('add-book-modal').classList.add('active');
         }
         function closeAddBookModal() {
@@ -2447,15 +2625,20 @@ function getCategoryStyle(cat) {
             const title = document.getElementById('input-book-title').value.trim();
             const author = document.getElementById('input-book-author').value.trim();
             let category = document.getElementById('input-book-category').value.trim();
+            const noteMethod =
+                document.getElementById('input-note-method').value;
             if(!title || !author) { alert('请完整填写书名和作者'); return; }
             if(!category) category = '未分类';
 
             const newBook = {
                 id: 'book-' + Date.now(), title: title, author: author, category: category, rating: 5, timestamp: Date.now(),
-                summary: simulateAIEngine(title, author, 'summary', '', category),
-                concepts: simulateAIEngine(title, author, 'concepts', '', category),
-                thoughts: simulateAIEngine(title, author, 'thoughts', '', category),
-                actions: simulateAIEngine(title, author, 'actions', '', category)
+                noteMethod: normalizeNoteMethod(noteMethod, category),
+                notesRevision: 0,
+                aiData: {},
+                summary: '',
+                concepts: '',
+                thoughts: '',
+                actions: ''
             };
             booksData.unshift(newBook);
             saveToLocalStorage();
@@ -2485,25 +2668,13 @@ function getCategoryStyle(cat) {
                         currentUser ? '' : 'none';
                 });
 
-            // 1. 根据图书类型，自适应转换模块文本名称与小标题提示内容
-            const isNovel = (book.category === '小说');
-            if (isNovel) {
-                document.getElementById('mod-concepts-title').innerText = "主要人物 / 关键概念解析";
-                document.getElementById('mod-thoughts-title').innerText = "3个核心思想 / 金句感悟";
-                document.getElementById('mod-actions-title').innerText = "启发 / 行动建议";
+            book.noteMethod =
+                normalizeNoteMethod(
+                    book.noteMethod,
+                    book.category
+                );
 
-                document.getElementById('mod-concepts-explanation').innerHTML = "";
-                document.getElementById('mod-thoughts-explanation').innerHTML = "";
-                document.getElementById('mod-actions-explanation').innerHTML = "";
-            } else {
-                document.getElementById('mod-concepts-title').innerText = "核心问题";
-                document.getElementById('mod-thoughts-title').innerText = "核心概念/工具";
-                document.getElementById('mod-actions-title').innerText = "洞见本质";
-
-                document.getElementById('mod-concepts-explanation').innerHTML = "🧠 <b>向导提示：</b>仔细阅读前言、引言和目录，作者通常会在开头明确提出他要挑战的流行误解、要填补的知识空白或要解答的具体疑问。";
-                document.getElementById('mod-thoughts-explanation').innerHTML = "🧭 <b>向导提示：</b>注意书中反复出现、被重点定义、作为章节标题的术语，思考这些核心概念/模型/框架/工具之间的关系：它们是并列的？还是层层递进的？";
-                document.getElementById('mod-actions-explanation').innerHTML = "🔮 <b>向导提示：</b>这些核心概念/框架的本质是什么？作者的独特视角是什么？对你看待相关问题的视角有什么影响？";
-            }
+            applyNoteMethodUI(book);
 
             updateDetailModeUI();
 
@@ -2515,6 +2686,11 @@ function getCategoryStyle(cat) {
             badge.style.background = `${style.color}15`;
             badge.style.color = style.color;
 
+            const noteMethodSelect =
+                document.getElementById('detail-note-method-select');
+            noteMethodSelect.value = book.noteMethod;
+            noteMethodSelect.disabled = !currentUser;
+
             document.getElementById('detail-cover-slot').innerHTML = createProceduralCover(book.title, book.author, book.category);
             updateInteractiveStarsUI(book.rating || 0);
 
@@ -2525,6 +2701,15 @@ function getCategoryStyle(cat) {
             document.getElementById('mod-thoughts-input').value = book.thoughts || '';
             document.getElementById('mod-actions-text').innerText = book.actions || '未记录。';
             document.getElementById('mod-actions-input').value = book.actions || '';
+
+            ['summary', 'concepts', 'thoughts', 'actions']
+                .forEach(field => {
+                    renderAIOutput(
+                        field,
+                        book.aiData?.[field],
+                        book.notesRevision
+                    );
+                });
 
             const stars = document.querySelectorAll('#detail-stars-interactive span');
             stars.forEach(star => {
@@ -2545,7 +2730,10 @@ function getCategoryStyle(cat) {
             });
         }
 
-        function closeBookDetailPanel() { document.getElementById('book-detail-overlay').classList.remove('active'); }
+        async function closeBookDetailPanel() {
+            await flushPendingNoteSave();
+            document.getElementById('book-detail-overlay').classList.remove('active');
+        }
         function handleOverlayOutsideClick(e) { if(e.target.id === 'book-detail-overlay') closeBookDetailPanel(); }
 
         function updateDetailModeUI() {
@@ -2554,9 +2742,6 @@ function getCategoryStyle(cat) {
             const fields = ['concepts', 'thoughts', 'actions'];
             
             const book = booksData.find(b => b.id === activeBookId);
-            const isNovel = book ? (book.category === '小说') : false;
-
-            // 控制动态小标题向导提示仅在非小说分类的编辑页展现
             const explanationElements = document.querySelectorAll('.module-subtitle-explanation');
 
             if(isEditing) {
@@ -2568,9 +2753,7 @@ function getCategoryStyle(cat) {
                     document.getElementById(`mod-${f}-input`).style.display = 'block';
                 });
 
-                if(!isNovel) {
-                    explanationElements.forEach(el => el.style.display = 'block');
-                }
+                explanationElements.forEach(el => el.style.display = 'block');
             } else {
                 toggleBtn.innerText = '✏️'; 
                 toggleBtn.classList.remove('editing');
@@ -2586,8 +2769,13 @@ function getCategoryStyle(cat) {
             }
         }
         
-        function toggleEditMode() {
+        async function toggleEditMode() {
             if (!requireAuthenticatedUser()) return;
+
+            if (isEditing) {
+                await flushPendingNoteSave();
+            }
+
             isEditing = !isEditing;
             updateDetailModeUI();
         }
@@ -2596,25 +2784,117 @@ function getCategoryStyle(cat) {
             if (!currentUser) return;
             if(!activeBookId) return;
             const book = booksData.find(b => b.id === activeBookId);
-            if(book) { book[f] = document.getElementById(`mod-${f}-input`).value; saveToLocalStorage(); }
+            if (!book) return;
+
+            book[f] =
+                document.getElementById(`mod-${f}-input`).value;
+
+            pendingNoteBookId = book.id;
+            clearTimeout(pendingNoteSaveTimer);
+            pendingNoteSaveTimer = setTimeout(
+                flushPendingNoteSave,
+                700
+            );
         }
 
-        function triggerModuleAI(field, op) {
+        async function flushPendingNoteSave() {
+            if (!pendingNoteSaveTimer || !pendingNoteBookId) {
+                return false;
+            }
+
+            clearTimeout(pendingNoteSaveTimer);
+            pendingNoteSaveTimer = null;
+
+            const book = booksData.find(
+                item => item.id === pendingNoteBookId
+            );
+            pendingNoteBookId = null;
+
+            if (!book || !currentUser) return false;
+
+            book.notesRevision =
+                Number(book.notesRevision || 0) + 1;
+
+            if (book.id === activeBookId) {
+                ['summary', 'concepts', 'thoughts', 'actions']
+                    .forEach(field => {
+                        renderAIOutput(
+                            field,
+                            book.aiData?.[field],
+                            book.notesRevision
+                        );
+                    });
+            }
+
+            await saveToLocalStorage();
+            return true;
+        }
+
+        async function updateCurrentBookNoteMethod(noteMethod) {
+            if (!requireAuthenticatedUser()) return;
+
+            const book = booksData.find(
+                item => item.id === activeBookId
+            );
+            if (!book) return;
+
+            book.noteMethod =
+                normalizeNoteMethod(
+                    noteMethod,
+                    book.category
+                );
+            book.notesRevision =
+                Number(book.notesRevision || 0) + 1;
+
+            applyNoteMethodUI(book);
+            ['summary', 'concepts', 'thoughts', 'actions']
+                .forEach(field => {
+                    renderAIOutput(
+                        field,
+                        book.aiData?.[field],
+                        book.notesRevision
+                    );
+                });
+            await saveToLocalStorage();
+        }
+
+        async function triggerModuleAI(field, op) {
             if (!requireAuthenticatedUser()) return;
             if(!activeBookId) return;
+
+            await flushPendingNoteSave();
+
             const book = booksData.find(b => b.id === activeBookId);
             const mask = document.getElementById(`mod-${field}-text`).closest('.detail-module').querySelector('.ai-loading-mask');
             mask.classList.add('active');
             setTimeout(() => {
                 mask.classList.remove('active');
                 let raw = field !== 'summary' ? document.getElementById(`mod-${field}-input`).value : '';
-                let res = simulateAIEngine(book.title, book.author, field, op === 'polish' ? raw : '', book.category);
-                if(field === 'summary') {
-                    book.summary = res; document.getElementById('mod-summary-text').innerText = res;
-                } else {
-                    book[field] = res; document.getElementById(`mod-${field}-input`).value = res;
-                    document.getElementById(`mod-${field}-text`).innerText = res;
-                }
+                let res = simulateAIEngine(
+                    book.title,
+                    book.author,
+                    field,
+                    op === 'polish' ? raw : '',
+                    book.category,
+                    book.noteMethod
+                );
+
+                book.aiData = book.aiData || {};
+                book.aiData[field] = {
+                    content: res,
+                    operation: op,
+                    notesRevision:
+                        Number(book.notesRevision || 0),
+                    generatedAt:
+                        new Date().toISOString(),
+                    provider: 'mock'
+                };
+
+                renderAIOutput(
+                    field,
+                    book.aiData[field],
+                    book.notesRevision
+                );
                 saveToLocalStorage();
             }, 500);
         }
@@ -2899,8 +3179,19 @@ function reAnalyzeUniverse() {
         }
 
         // ================= MOCK AI KNOWLEDGE BASE =================
-        function simulateAIEngine(title, author, type, rawInput = '', category = '') {
-            const isNovel = (category === '小说');
+        function simulateAIEngine(
+            title,
+            author,
+            type,
+            rawInput = '',
+            category = '',
+            noteMethod = null
+        ) {
+            const isNovel =
+                normalizeNoteMethod(
+                    noteMethod,
+                    category
+                ) === 'rat';
             if (type === 'summary') return `【AI辅助生成】《${title}》是由学者/作者 ${author} 悉心打漠的重磅之作。全书核心旨在重塑传统惯性思维，是一本打破成见、沉淀底层逻辑的高阶思想图谱。`;
             
             if (type === 'concepts') {
