@@ -1636,7 +1636,7 @@
                     <div class="module-header">
                         <span class="module-title-absolute" id="mod-summary-title">内容概要</span>
                         <div class="ai-btn-group">
-                            <button class="btn-ai edit-only-btn" style="display:none;" onclick="triggerModuleAI('summary', 'regenerate')">✦ AI 独立建议</button>
+                            <button class="btn-ai edit-only-btn" style="display:none;" onclick="regenerateBookOverview()">↻ 重新生成概要</button>
                         </div>
                     </div>
                     <div class="module-content-text" id="mod-summary-text"></div>
@@ -2849,6 +2849,14 @@ function getCategoryStyle(cat) {
             }
         }
 
+        async function regenerateBookOverview() {
+            if (!requireAuthenticatedUser() || !activeBookId) return;
+            const book = booksData.find(item => item.id === activeBookId);
+            if (!book) return;
+            if (!confirm('重新联网检索并生成内容概要？当前 AI 概要将被替换，可能产生模型与搜索费用。')) return;
+            await generateAutomaticBookSummary(book);
+        }
+
         function buildBookOverviewMessages(book) {
             return [
                 {
@@ -3276,14 +3284,13 @@ async function reAnalyzeUniverse() {
         }
 
         function rebuildUniversePlanets() {
-            const counts = {}; booksData.forEach(b => counts[b.category] = (counts[b.category] || 0) + 1);
             cosmosState.planets = booksData.map((book, idx) => {
                 const angle = idx * 2.39996 + 0.2;
                 const dist = 75 + Math.sqrt(idx) * 48;
                 return {
                     id: book.id, title: book.title, author: book.author, category: book.category, rating: book.rating,
                     x: Math.cos(angle) * dist, y: Math.sin(angle) * dist,
-                    radius: 11 + Math.min((counts[book.category] || 1) * 1.8, 15),
+                    radius: 12.8,
                     color: getCategoryStyle(book.category).color, orbitSpeed: 0.06 / (idx + 1)
                 };
             });
