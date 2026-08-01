@@ -1636,7 +1636,7 @@
                     <div class="module-header">
                         <span class="module-title-absolute" id="mod-summary-title">内容概要</span>
                         <div class="ai-btn-group">
-                            <button class="btn-ai" onclick="triggerModuleAI('summary', 'regenerate')">✦ AI 独立建议</button>
+                            <button class="btn-ai edit-only-btn" style="display:none;" onclick="triggerModuleAI('summary', 'regenerate')">✦ AI 独立建议</button>
                         </div>
                     </div>
                     <div class="module-content-text" id="mod-summary-text"></div>
@@ -2396,7 +2396,18 @@ async function loadBooksFromSupabase(user = currentUser) {
             label.innerText = isStale
                 ? 'AI 思考建议 · 基于旧版本笔记'
                 : 'AI 思考建议 · 独立保存，不会覆盖你的笔记';
-            panel.classList.toggle('active', Boolean(text));
+            panel.classList.toggle('active', Boolean(text) && isEditing);
+        }
+
+        function getBookSummaryText(book) {
+            const legacyAutomaticSummary =
+                book.aiData?.summary?.operation === 'auto_summary'
+                    ? book.aiData.summary.content
+                    : '';
+            return book.summary ||
+                book.aiData?.overview?.content ||
+                legacyAutomaticSummary ||
+                '';
         }
 
         function createDemoBooks() {
@@ -2742,7 +2753,7 @@ function getCategoryStyle(cat) {
             document.getElementById('add-book-modal').classList.remove('active');
         }
 
-        function submitAddBook() {
+        async function submitAddBook() {
             if (!requireAuthenticatedUser()) return;
             const title = document.getElementById('input-book-title').value.trim();
             const author = document.getElementById('input-book-author').value.trim();
@@ -2763,11 +2774,46 @@ function getCategoryStyle(cat) {
                 actions: ''
             };
             booksData.unshift(newBook);
-            saveToLocalStorage();
-            updateGlobalCounter();
-            renderShelfView();
+            await saveToLocalStorage();
+            refreshApplicationData();
             closeAddBookModal();
             openBookDetailPanel(newBook.id);
+            await generateAutomaticBookSummary(newBook);
+        }
+
+        async function generateAutomaticBookSummary(book) {
+            const settings = getLocalAISettings();
+            if (!settings.apiKey) return false;
+
+            const summaryText = document.getElementById('mod-summary-text');
+            const mask = summaryText.closest('.detail-module').querySelector('.ai-loading-mask');
+            summaryText.innerText = 'AI 正在生成内容概要…';
+            mask.classList.add('active');
+            try {
+                const result = await callAIProvider(
+                    buildBookAIMessages(book, 'summary', 'auto_summary'),
+                    settings
+                );
+                book.aiData = book.aiData || {};
+                book.aiData.overview = {
+                    content: result.content,
+                    operation: 'auto_summary',
+                    notesRevision: Number(book.notesRevision || 0),
+                    generatedAt: new Date().toISOString(),
+                    provider: result.settings.provider,
+                    model: result.settings.model
+                };
+                summaryText.innerText = getBookSummaryText(book) || '暂无概要';
+                await saveToLocalStorage();
+                refreshApplicationData();
+                return true;
+            } catch (error) {
+                summaryText.innerText = '暂无概要';
+                alert(`书籍已添加，但内容概要生成失败：${error.message || '请稍后重试'}`);
+                return false;
+            } finally {
+                mask.classList.remove('active');
+            }
         }
 
         // ================= 核心逻辑：双轨制动态标题与说明文字转换 =================
@@ -2816,7 +2862,7 @@ function getCategoryStyle(cat) {
             document.getElementById('detail-cover-slot').innerHTML = createProceduralCover(book.title, book.author, book.category);
             updateInteractiveStarsUI(book.rating || 0);
 
-            document.getElementById('mod-summary-text').innerText = book.summary || '暂无概要';
+            document.getElementById('mod-summary-text').innerText = getBookSummaryText(book) || '暂无概要';
             document.getElementById('mod-concepts-text').innerText = book.concepts || '未记录。';
             document.getElementById('mod-concepts-input').value = book.concepts || '';
             document.getElementById('mod-thoughts-text').innerText = book.thoughts || '未记录。';
@@ -2888,6 +2934,12 @@ function getCategoryStyle(cat) {
                 if(activeBookId && book) {
                     fields.forEach(f => { document.getElementById(`mod-${f}-text`).innerText = book[f] || '暂无内容'; });
                 }
+            }
+
+            if (book) {
+                ['summary', 'concepts', 'thoughts', 'actions'].forEach(field => {
+                    renderAIOutput(field, book.aiData?.[field], book.notesRevision);
+                });
             }
         }
         
@@ -3032,6 +3084,7 @@ function getCategoryStyle(cat) {
                 actions: '底层原理或行动启发'
             };
             const operationInstructions = {
+                auto_summary: '根据现有书籍元数据生成简洁的内容概要。若没有原文或用户笔记，必须说明这是基于元数据的概览，不得虚构具体情节、论点或引文。',
                 regenerate: '给出一份独立的 AI 建议，不冒充用户结论。',
                 generate: '补充新的分析视角，指出它与用户原笔记的关系。',
                 polish: '只提出结构、表达与论证的修改建议，不直接改写或覆盖用户笔记。'
@@ -3062,14 +3115,57 @@ function getCategoryStyle(cat) {
 // AI重新分析阅读宇宙
 // =============================
 
-function reAnalyzeUniverse() {
-
+async function reAnalyzeUniverse() {
+    if (!requireAuthenticatedUser()) return;
     renderDataInsights();
 
-    alert(
-        '阅读宇宙已重新分析完成'
-    );
-}   
+    const settings = getLocalAISettings();
+    if (!settings.apiKey) {
+        alert('请先在设置中心配置 AI Provider 与 API Key');
+        await showSettings();
+        return;
+    }
+
+    const masks = document.querySelectorAll('#view-insights .ai-loading-mask');
+    masks.forEach(mask => mask.classList.add('active'));
+    try {
+        const readingContext = booksData.map(book => {
+            const addedAt = new Date(Number(book.timestamp));
+            return {
+                title: book.title,
+                author: book.author,
+                category: book.category,
+                rating: book.rating,
+                addedAt: Number.isNaN(addedAt.getTime())
+                    ? '未知'
+                    : addedAt.toISOString().slice(0, 10),
+                noteMethod: book.noteMethod,
+                notes: {
+                    summary: book.summary,
+                    concepts: book.concepts,
+                    thoughts: book.thoughts,
+                    actions: book.actions
+                }
+            };
+        });
+        const result = await callAIProvider([
+            {
+                role: 'system',
+                content: '你是 Reading Cosmos 的阅读数据分析助手。只根据用户提供的书籍与笔记总结阅读特征，不虚构阅读经历；用户笔记高于 AI 判断。用一段不超过 220 字的中文给出年度阅读洞察。'
+            },
+            {
+                role: 'user',
+                content: `请重新分析我的阅读宇宙：\n${JSON.stringify(readingContext)}`
+            }
+        ], settings);
+        document.getElementById('report-ceremony-text').innerText = result.content;
+        alert('阅读数据与 AI 洞察已重新分析完成');
+    } catch (error) {
+        alert(error.message || 'AI 重新分析失败，请稍后重试');
+    } finally {
+        masks.forEach(mask => mask.classList.remove('active'));
+    }
+}
 
         // ================= 互动星球宇宙画布渲染引擎（精细调和暗夜底色） =================
         let cosmosCanvas, cosmosCtx;
@@ -3286,11 +3382,16 @@ function reAnalyzeUniverse() {
 
             // 趋势折线图
             const trend = document.getElementById('trend-svg-element'); trend.innerHTML = '';
-            const mList = ['1月', '2月', '3月', '4月', '5月', '6月'];
+            const now = new Date();
+            const insightYear = now.getFullYear();
+            const mList = Array.from(
+                { length: now.getMonth() + 1 },
+                (_, index) => `${index + 1}月`
+            );
             const pts = []; const wTot = trend.clientWidth || 320;
             mList.forEach((m, i) => {
-                let cnt = bCountByMonth(m);
-                let x = (i / (mList.length - 1)) * (wTot - 40) + 20;
+                let cnt = bCountByMonth(i, insightYear);
+                let x = (i / Math.max(mList.length - 1, 1)) * (wTot - 40) + 20;
                 let y = 120 - (Math.min(cnt, 6) * 15);
                 pts.push({x, y, label: m, val: cnt});
             });
@@ -3325,10 +3426,13 @@ function reAnalyzeUniverse() {
                 `今年，你用纯粹的热爱不断开疆拓土，亲手拓宽着个人的心智认知边界。从最初星火点点，到现在以【${topCat}】为核心的主导星系巍然成型。你在系统里记录下的每一次金句复盘或本质洞察，都是在浮躁的信息巨浪中为自己焊死的一枚理性精神锚点。你的阅读宇宙，正在绽放出属于自己、坚不可摧的终极智慧晶体。`;
         }
 
-        function bCountByMonth(m) {
-            let map = {'1月':1, '2月':2, '3月':3, '4月':4, '5月':5, '6月':6};
-            let c = 0; booksData.forEach(b => { if(new Date(b.timestamp).getMonth() + 1 === map[m]) c++; });
-            return c || (m === '5月' ? 2 : (m === '6月' ? 1 : 0));
+        function bCountByMonth(monthIndex, year) {
+            return booksData.filter(book => {
+                const addedAt = new Date(Number(book.timestamp));
+                return !Number.isNaN(addedAt.getTime()) &&
+                    addedAt.getFullYear() === year &&
+                    addedAt.getMonth() === monthIndex;
+            }).length;
         }
 
     </script>
