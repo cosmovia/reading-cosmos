@@ -918,6 +918,19 @@
             display: block;
         }
 
+        .cosmos-toolbar { position: absolute; top: 18px; left: 18px; right: 18px; z-index: 55; display: flex; align-items: center; gap: 10px; pointer-events: none; }
+        .cosmos-search-shell { display: flex; align-items: center; gap: 8px; padding: 7px; border: 1px solid rgba(148, 163, 184, 0.25); border-radius: 14px; background: rgba(2, 6, 23, 0.68); backdrop-filter: blur(16px); box-shadow: 0 10px 30px rgba(2, 6, 23, 0.22); pointer-events: auto; }
+        .cosmos-search-input { width: min(280px, 38vw); border: none; outline: none; background: transparent; color: #e2e8f0; padding: 5px 7px; font-size: 0.85rem; }
+        .cosmos-search-input::placeholder { color: #64748b; }
+        .cosmos-tool-btn { border: 1px solid rgba(125, 211, 252, 0.18); border-radius: 9px; background: rgba(14, 165, 233, 0.12); color: #bae6fd; padding: 7px 10px; font-size: 0.78rem; cursor: pointer; white-space: nowrap; }
+        .cosmos-tool-btn:hover { background: rgba(14, 165, 233, 0.24); }
+        .cosmos-search-status { color: #94a3b8; font-size: 0.76rem; pointer-events: none; }
+        @media (max-width: 640px) {
+            .cosmos-toolbar { flex-wrap: wrap; }
+            .cosmos-search-input { width: 45vw; }
+            .cosmos-search-status { width: 100%; }
+        }
+
         .cosmos-instruction-overlay {
             position: absolute;
             bottom: 20px;
@@ -1396,6 +1409,15 @@
         <section id="view-cosmos" class="view-section">
             <div class="cosmos-viewport-container" id="cosmos-box-container">
                 <canvas id="interactive-cosmos-canvas"></canvas>
+                <div class="cosmos-toolbar">
+                    <div class="cosmos-search-shell">
+                        <input id="cosmos-search-input" class="cosmos-search-input" type="search" list="cosmos-book-options" placeholder="搜索书名或作者" onkeydown="handleCosmosSearchKey(event)">
+                        <datalist id="cosmos-book-options"></datalist>
+                        <button class="cosmos-tool-btn" onclick="locateCosmosPlanet()">定位</button>
+                        <button class="cosmos-tool-btn" onclick="resetCosmosView()">重置</button>
+                    </div>
+                    <div class="cosmos-search-status" id="cosmos-search-status">按分类形成知识星系</div>
+                </div>
                 <div class="cosmos-instruction-overlay">🔮 提示：支持鼠标拖拽平移、滚轮缩放、点击星球查看详情。</div>
                 <div class="planet-popover-card" id="planet-popover">
                     <div class="popover-flex">
@@ -2503,7 +2525,8 @@ async function loadBooksFromSupabase(user = currentUser) {
 
         let cosmosState = {
             scale: 1.0, offsetX: 0, offsetY: 0, isDragging: false, startX: 0, startY: 0,
-            planets: [], hoveredPlanetIndex: null, animationFrameId: null, time: 0
+            planets: [], galaxies: [], hoveredPlanetIndex: null, focusedPlanetId: null,
+            animationFrameId: null, time: 0
         };
 
         const CATEGORY_MAP = {
@@ -3283,17 +3306,110 @@ async function reAnalyzeUniverse() {
             }
         }
 
+        const GALAXY_ANGLES = {
+            '文学': -2.7, '小说': -2.0, '历史': -1.25, '哲学': -0.45,
+            '心理学': 0.35, '商业': 1.1, '科技': 1.9, '未分类': 2.7
+        };
+
+        function stableCosmosHash(value) {
+            let hash = 2166136261;
+            const text = String(value || '');
+            for (let index = 0; index < text.length; index++) {
+                hash ^= text.charCodeAt(index);
+                hash = Math.imul(hash, 16777619);
+            }
+            return hash >>> 0;
+        }
+
+        function getGalaxyCenter(category) {
+            const categoryHash = stableCosmosHash(category);
+            const angle = GALAXY_ANGLES[category] ?? ((categoryHash % 6283) / 1000 - Math.PI);
+            const distance = 215 + (categoryHash % 3) * 22;
+            return { x: Math.cos(angle) * distance, y: Math.sin(angle) * distance, angle };
+        }
+
         function rebuildUniversePlanets() {
-            cosmosState.planets = booksData.map((book, idx) => {
-                const angle = idx * 2.39996 + 0.2;
-                const dist = 75 + Math.sqrt(idx) * 48;
+            const categoryCounts = {};
+            booksData.forEach(book => {
+                const category = book.category || '未分类';
+                categoryCounts[category] = (categoryCounts[category] || 0) + 1;
+            });
+            cosmosState.galaxies = Object.keys(categoryCounts).map(category => ({
+                category,
+                count: categoryCounts[category],
+                color: getCategoryStyle(category).color,
+                ...getGalaxyCenter(category)
+            }));
+
+            cosmosState.planets = booksData.map(book => {
+                const category = book.category || '未分类';
+                const center = getGalaxyCenter(category);
+                const identityHash = stableCosmosHash(`${book.id}|${book.title}|${book.author}`);
+                const angle = ((identityHash % 6283) / 1000) + center.angle;
+                const distance = 34 + ((identityHash >>> 8) % 5) * 15;
                 return {
-                    id: book.id, title: book.title, author: book.author, category: book.category, rating: book.rating,
-                    x: Math.cos(angle) * dist, y: Math.sin(angle) * dist,
+                    id: book.id, title: book.title, author: book.author, category, rating: book.rating,
+                    x: center.x + Math.cos(angle) * distance,
+                    y: center.y + Math.sin(angle) * distance,
                     radius: 12.8,
-                    color: getCategoryStyle(book.category).color, orbitSpeed: 0.06 / (idx + 1)
+                    color: getCategoryStyle(category).color,
+                    driftPhase: (identityHash % 360) * Math.PI / 180,
+                    driftSpeed: 0.18 + ((identityHash >>> 16) % 7) * 0.012
                 };
             });
+
+            const options = document.getElementById('cosmos-book-options');
+            if (options) {
+                options.innerHTML = '';
+                booksData.forEach(book => {
+                    const option = document.createElement('option');
+                    option.value = book.title;
+                    option.label = `${book.author || '未知作者'} · ${book.category || '未分类'}`;
+                    options.appendChild(option);
+                });
+            }
+        }
+
+        function handleCosmosSearchKey(event) {
+            if (event.key === 'Enter') locateCosmosPlanet();
+        }
+
+        function locateCosmosPlanet() {
+            const input = document.getElementById('cosmos-search-input');
+            const status = document.getElementById('cosmos-search-status');
+            const query = input.value.trim().toLocaleLowerCase();
+            if (!query) {
+                status.innerText = '请输入书名或作者';
+                return;
+            }
+            const index = cosmosState.planets.findIndex(planet =>
+                planet.title.toLocaleLowerCase().includes(query) ||
+                String(planet.author || '').toLocaleLowerCase().includes(query)
+            );
+            if (index < 0) {
+                cosmosState.focusedPlanetId = null;
+                status.innerText = '没有找到匹配的思想星球';
+                return;
+            }
+            const planet = cosmosState.planets[index];
+            cosmosState.scale = Math.max(cosmosState.scale, 1.35);
+            cosmosState.offsetX = cosmosCanvas.width / 2 - planet.x * cosmosState.scale;
+            cosmosState.offsetY = cosmosCanvas.height / 2 - planet.y * cosmosState.scale;
+            cosmosState.hoveredPlanetIndex = index;
+            cosmosState.focusedPlanetId = planet.id;
+            status.innerText = `${planet.title} · ${planet.category}`;
+            document.getElementById('planet-popover').style.display = 'none';
+        }
+
+        function resetCosmosView() {
+            cosmosState.scale = 1;
+            cosmosState.offsetX = cosmosCanvas.width / 2;
+            cosmosState.offsetY = cosmosCanvas.height / 2;
+            cosmosState.hoveredPlanetIndex = null;
+            cosmosState.focusedPlanetId = null;
+            document.getElementById('cosmos-search-input').value = '';
+            document.getElementById('cosmos-search-status').innerText = '按分类形成知识星系';
+            document.getElementById('planet-popover').style.display = 'none';
         }
 
         function renderCosmosGraphics() {
@@ -3303,19 +3419,29 @@ async function reAnalyzeUniverse() {
             cosmosCtx.translate(cosmosState.offsetX, cosmosState.offsetY);
             cosmosCtx.scale(cosmosState.scale, cosmosState.scale);
 
-            // 黑夜星空质感微光星轨线
-            cosmosCtx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
-            cosmosCtx.lineWidth = 1;
-            for(let r = 90; r <= 450; r += 90) {
-                cosmosCtx.beginPath(); cosmosCtx.arc(0, 0, r, 0, Math.PI * 2); cosmosCtx.stroke();
-            }
+            cosmosState.galaxies.forEach(galaxy => {
+                const haloRadius = 64 + Math.min(galaxy.count, 8) * 4;
+                const halo = cosmosCtx.createRadialGradient(galaxy.x, galaxy.y, 0, galaxy.x, galaxy.y, haloRadius);
+                halo.addColorStop(0, `${galaxy.color}24`);
+                halo.addColorStop(0.55, `${galaxy.color}10`);
+                halo.addColorStop(1, `${galaxy.color}00`);
+                cosmosCtx.fillStyle = halo;
+                cosmosCtx.beginPath();
+                cosmosCtx.arc(galaxy.x, galaxy.y, haloRadius, 0, Math.PI * 2);
+                cosmosCtx.fill();
+                cosmosCtx.fillStyle = `${galaxy.color}aa`;
+                cosmosCtx.font = '600 11px sans-serif';
+                cosmosCtx.textAlign = 'center';
+                cosmosCtx.fillText(`${galaxy.category}星系 · ${galaxy.count}`, galaxy.x, galaxy.y - haloRadius - 8);
+            });
 
             // 绘制自发光量子星球
             cosmosState.planets.forEach((p, idx) => {
-                const angle = cosmosState.time * p.orbitSpeed;
-                p.x_eval = p.x * Math.cos(angle) - p.y * Math.sin(angle);
-                p.y_eval = p.x * Math.sin(angle) + p.y * Math.cos(angle);
+                const drift = cosmosState.time * p.driftSpeed + p.driftPhase;
+                p.x_eval = p.x + Math.cos(drift) * 3;
+                p.y_eval = p.y + Math.sin(drift) * 3;
                 const isHovered = (cosmosState.hoveredPlanetIndex === idx);
+                const isFocused = cosmosState.focusedPlanetId === p.id;
 
                 cosmosCtx.save();
                 cosmosCtx.shadowBlur = isHovered ? 18 : 8;
@@ -3331,6 +3457,14 @@ async function reAnalyzeUniverse() {
                 cosmosCtx.fillStyle = grad;
                 cosmosCtx.fill();
                 cosmosCtx.restore();
+
+                if (isFocused) {
+                    cosmosCtx.strokeStyle = 'rgba(186, 230, 253, 0.9)';
+                    cosmosCtx.lineWidth = 1.5;
+                    cosmosCtx.beginPath();
+                    cosmosCtx.arc(p.x_eval, p.y_eval, p.radius + 9 + Math.sin(cosmosState.time * 4) * 2, 0, Math.PI * 2);
+                    cosmosCtx.stroke();
+                }
 
                 if(p.rating >= 5) {
                     cosmosCtx.strokeStyle = `${p.color}66`;
