@@ -916,6 +916,21 @@
             box-shadow: inset 0 0 40px rgba(0,0,0,0.5);
         }
 
+        body.cosmos-immersive-active { overflow: hidden; }
+        .cosmos-viewport-container.is-immersive,
+        .cosmos-viewport-container:fullscreen {
+            position: fixed;
+            inset: 0;
+            width: 100vw;
+            height: 100vh;
+            height: 100dvh;
+            z-index: 2000;
+            border: none;
+            border-radius: 0;
+            box-shadow: none;
+        }
+        .cosmos-viewport-container::backdrop { background: #020617; }
+
         #interactive-cosmos-canvas {
             width: 100%;
             height: 100%;
@@ -929,10 +944,37 @@
         .cosmos-tool-btn { border: 1px solid rgba(125, 211, 252, 0.18); border-radius: 9px; background: rgba(14, 165, 233, 0.12); color: #bae6fd; padding: 7px 10px; font-size: 0.78rem; cursor: pointer; white-space: nowrap; }
         .cosmos-tool-btn:hover { background: rgba(14, 165, 233, 0.24); }
         .cosmos-search-status { color: #94a3b8; font-size: 0.76rem; pointer-events: none; }
+        .cosmos-fullscreen-btn {
+            position: absolute;
+            top: 18px;
+            right: 18px;
+            z-index: 56;
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            border: 1px solid rgba(148, 163, 184, 0.22);
+            border-radius: 12px;
+            background: rgba(2, 6, 23, 0.52);
+            color: #cbd5e1;
+            padding: 9px 12px;
+            font-size: 0.78rem;
+            cursor: pointer;
+            backdrop-filter: blur(14px);
+            transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+        }
+        .cosmos-fullscreen-btn:hover {
+            color: #ffffff;
+            border-color: rgba(125, 211, 252, 0.42);
+            background: rgba(14, 165, 233, 0.2);
+        }
+        .cosmos-fullscreen-icon { font-size: 1rem; line-height: 1; }
         @media (max-width: 640px) {
             .cosmos-toolbar { flex-wrap: wrap; }
             .cosmos-search-input { width: 45vw; }
             .cosmos-search-status { width: 100%; }
+            .cosmos-fullscreen-btn { top: auto; right: 14px; bottom: 14px; }
+            .cosmos-fullscreen-label { display: none; }
+            .cosmos-instruction-overlay { display: none; }
         }
 
         .cosmos-instruction-overlay {
@@ -1422,6 +1464,17 @@
                     </div>
                     <div class="cosmos-search-status" id="cosmos-search-status">按分类形成知识星系</div>
                 </div>
+                <button
+                    class="cosmos-fullscreen-btn"
+                    id="cosmos-fullscreen-btn"
+                    type="button"
+                    onclick="toggleCosmosImmersive()"
+                    aria-label="进入沉浸式全屏"
+                    aria-pressed="false"
+                    title="进入沉浸式全屏">
+                    <span class="cosmos-fullscreen-icon" id="cosmos-fullscreen-icon" aria-hidden="true">⤢</span>
+                    <span class="cosmos-fullscreen-label" id="cosmos-fullscreen-label">全屏</span>
+                </button>
                 <div class="cosmos-instruction-overlay">🔮 提示：支持鼠标拖拽平移、滚轮缩放、点击星球查看详情。</div>
                 <div class="planet-popover-card" id="planet-popover">
                     <div class="popover-flex">
@@ -2530,7 +2583,7 @@ async function loadBooksFromSupabase(user = currentUser) {
         let cosmosState = {
             scale: 1.0, offsetX: 0, offsetY: 0, isDragging: false, startX: 0, startY: 0,
             planets: [], galaxies: [], hoveredPlanetIndex: null, focusedPlanetId: null,
-            animationFrameId: null, time: 0
+            animationFrameId: null, time: 0, isImmersive: false, viewBeforeImmersive: null
         };
 
         const CATEGORY_MAP = {
@@ -2604,6 +2657,10 @@ function getCategoryStyle(cat) {
                 resizeBgCanvas();
 
                 resizeCosmosCanvas();
+
+                if (cosmosState.isImmersive && currentView === 'cosmos') {
+                    fitCosmosToContent();
+                }
 
             }
         );
@@ -3266,6 +3323,17 @@ async function reAnalyzeUniverse() {
         function initInteractiveCosmos() {
             cosmosCanvas = document.getElementById('interactive-cosmos-canvas');
             cosmosCtx = cosmosCanvas.getContext('2d');
+
+            document.addEventListener('fullscreenchange', () => {
+                if (!document.fullscreenElement && cosmosState.isImmersive) {
+                    exitCosmosImmersive(false);
+                }
+            });
+            document.addEventListener('keydown', event => {
+                if (event.key === 'Escape' && cosmosState.isImmersive && !document.fullscreenElement) {
+                    exitCosmosImmersive(false);
+                }
+            });
             
             cosmosCanvas.addEventListener('mousedown', (e) => {
                 cosmosState.isDragging = true;
@@ -3313,6 +3381,83 @@ async function reAnalyzeUniverse() {
                 cosmosState.animationFrameId = requestAnimationFrame(loop);
             }
             loop();
+        }
+
+        function updateCosmosFullscreenButton() {
+            const button = document.getElementById('cosmos-fullscreen-btn');
+            const icon = document.getElementById('cosmos-fullscreen-icon');
+            const label = document.getElementById('cosmos-fullscreen-label');
+            if (!button || !icon || !label) return;
+            const active = cosmosState.isImmersive;
+            icon.innerText = active ? '⤡' : '⤢';
+            label.innerText = active ? '退出全屏' : '全屏';
+            button.setAttribute('aria-label', active ? '退出沉浸式全屏' : '进入沉浸式全屏');
+            button.setAttribute('aria-pressed', String(active));
+            button.title = active ? '退出沉浸式全屏（Esc）' : '进入沉浸式全屏';
+        }
+
+        async function enterCosmosImmersive() {
+            if (cosmosState.isImmersive) return;
+            const box = document.getElementById('cosmos-box-container');
+            cosmosState.viewBeforeImmersive = {
+                scale: cosmosState.scale,
+                offsetX: cosmosState.offsetX,
+                offsetY: cosmosState.offsetY
+            };
+            cosmosState.isImmersive = true;
+            box.classList.add('is-immersive');
+            document.body.classList.add('cosmos-immersive-active');
+            updateCosmosFullscreenButton();
+            requestAnimationFrame(() => {
+                resizeCosmosCanvas();
+                fitCosmosToContent();
+            });
+
+            if (box.requestFullscreen && !document.fullscreenElement) {
+                try {
+                    await box.requestFullscreen();
+                } catch (error) {
+                    console.info('浏览器未启用原生全屏，继续使用页面内沉浸模式', error);
+                }
+            }
+        }
+
+        async function exitCosmosImmersive(exitNativeFullscreen = true) {
+            if (!cosmosState.isImmersive) return;
+            if (exitNativeFullscreen && document.fullscreenElement && document.exitFullscreen) {
+                try {
+                    await document.exitFullscreen();
+                    return;
+                } catch (error) {
+                    console.info('退出原生全屏失败，恢复页面内布局', error);
+                }
+            }
+
+            const box = document.getElementById('cosmos-box-container');
+            const previousView = cosmosState.viewBeforeImmersive;
+            cosmosState.isImmersive = false;
+            cosmosState.viewBeforeImmersive = null;
+            box.classList.remove('is-immersive');
+            document.body.classList.remove('cosmos-immersive-active');
+            updateCosmosFullscreenButton();
+            requestAnimationFrame(() => {
+                resizeCosmosCanvas();
+                if (previousView) {
+                    cosmosState.scale = previousView.scale;
+                    cosmosState.offsetX = previousView.offsetX;
+                    cosmosState.offsetY = previousView.offsetY;
+                } else {
+                    fitCosmosToContent();
+                }
+            });
+        }
+
+        function toggleCosmosImmersive() {
+            if (cosmosState.isImmersive) {
+                exitCosmosImmersive();
+            } else {
+                enterCosmosImmersive();
+            }
         }
 
         function resizeCosmosCanvas() {
