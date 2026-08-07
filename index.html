@@ -35,6 +35,10 @@
             --color-psyc: #10b981;    /* 心理学 */
             --color-biz: #f59e0b;     /* 商业 */
             --color-tech: #0ea5e9;    /* 科技 */
+            --color-bio: #6366f1;     /* 传记 */
+            --color-social: #06b6d4;  /* 社会科学 */
+            --color-science: #22c55e; /* 自然科学 */
+            --color-art: #f97316;     /* 艺术 */
             --color-default: #94a3b8; /* 默认 */
         }
 
@@ -919,8 +923,8 @@
         }
 
         .cosmos-toolbar { position: absolute; top: 18px; left: 18px; right: 18px; z-index: 55; display: flex; align-items: center; gap: 10px; pointer-events: none; }
-        .cosmos-search-shell { display: flex; align-items: center; gap: 8px; padding: 7px; border: 1px solid rgba(148, 163, 184, 0.25); border-radius: 14px; background: rgba(2, 6, 23, 0.68); backdrop-filter: blur(16px); box-shadow: 0 10px 30px rgba(2, 6, 23, 0.22); pointer-events: auto; }
-        .cosmos-search-input { width: min(280px, 38vw); border: none; outline: none; background: transparent; color: #e2e8f0; padding: 5px 7px; font-size: 0.85rem; }
+        .cosmos-search-shell { display: flex; align-items: center; gap: 6px; padding: 5px; border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 12px; background: rgba(2, 6, 23, 0.48); backdrop-filter: blur(14px); box-shadow: 0 8px 24px rgba(2, 6, 23, 0.16); pointer-events: auto; }
+        .cosmos-search-input { width: min(190px, 34vw); border: none; outline: none; background: transparent; color: #e2e8f0; padding: 5px 7px; font-size: 0.8rem; }
         .cosmos-search-input::placeholder { color: #64748b; }
         .cosmos-tool-btn { border: 1px solid rgba(125, 211, 252, 0.18); border-radius: 9px; background: rgba(14, 165, 233, 0.12); color: #bae6fd; padding: 7px 10px; font-size: 0.78rem; cursor: pointer; white-space: nowrap; }
         .cosmos-tool-btn:hover { background: rgba(14, 165, 233, 0.24); }
@@ -2536,9 +2540,23 @@ async function loadBooksFromSupabase(user = currentUser) {
             '哲学': { color: '#8b5cf6', label: '哲学' },
             '心理学': { color: '#10b981', label: '心理学' },
             '商业': { color: '#f59e0b', label: '商业' },
+            '财经': { color: '#f59e0b', label: '商业与财经' },
             '科技': { color: '#0ea5e9', label: '科技' },
+            '传记': { color: '#6366f1', label: '传记' },
+            '社会科学': { color: '#06b6d4', label: '社会科学' },
+            '自然科学': { color: '#22c55e', label: '自然科学' },
+            '艺术': { color: '#f97316', label: '艺术' },
             '未分类': { color: '#94a3b8', label: '通用' }
         };
+
+        function normalizeBookTitle(title) {
+            const normalized = String(title || '').trim();
+            if (normalized.startsWith('《') && normalized.endsWith('》')) {
+                return normalized.slice(1, -1).trim();
+            }
+            return normalized;
+        }
+
 function getCategoryStyle(cat) {
 
     return CATEGORY_MAP[cat] || {
@@ -2809,7 +2827,7 @@ function getCategoryStyle(cat) {
 
         async function submitAddBook() {
             if (!requireAuthenticatedUser()) return;
-            const title = document.getElementById('input-book-title').value.trim();
+            const title = normalizeBookTitle(document.getElementById('input-book-title').value);
             const author = document.getElementById('input-book-author').value.trim();
             let category = document.getElementById('input-book-category').value.trim();
             const noteMethod =
@@ -3306,11 +3324,6 @@ async function reAnalyzeUniverse() {
             }
         }
 
-        const GALAXY_ANGLES = {
-            '文学': -2.7, '小说': -2.0, '历史': -1.25, '哲学': -0.45,
-            '心理学': 0.35, '商业': 1.1, '科技': 1.9, '未分类': 2.7
-        };
-
         function stableCosmosHash(value) {
             let hash = 2166136261;
             const text = String(value || '');
@@ -3321,41 +3334,93 @@ async function reAnalyzeUniverse() {
             return hash >>> 0;
         }
 
-        function getGalaxyCenter(category) {
-            const categoryHash = stableCosmosHash(category);
-            const angle = GALAXY_ANGLES[category] ?? ((categoryHash % 6283) / 1000 - Math.PI);
-            const distance = 215 + (categoryHash % 3) * 22;
-            return { x: Math.cos(angle) * distance, y: Math.sin(angle) * distance, angle };
+        function getGalaxyCenter(index, total) {
+            if (total <= 1) return { x: 0, y: 0, angle: 0 };
+            const angle = -Math.PI + (Math.PI * 2 * index / total);
+            return {
+                x: Math.cos(angle) * 330,
+                y: Math.sin(angle) * 135,
+                angle
+            };
+        }
+
+        function fitCosmosToContent() {
+            if (!cosmosCanvas || !cosmosState.galaxies.length) {
+                cosmosState.scale = 1;
+                cosmosState.offsetX = cosmosCanvas ? cosmosCanvas.width / 2 : 0;
+                cosmosState.offsetY = cosmosCanvas ? cosmosCanvas.height / 2 : 0;
+                return;
+            }
+
+            const paddingX = 72;
+            const paddingTop = 88;
+            const paddingBottom = 58;
+            const bounds = cosmosState.galaxies.reduce((result, galaxy) => ({
+                minX: Math.min(result.minX, galaxy.x - galaxy.haloRadius),
+                maxX: Math.max(result.maxX, galaxy.x + galaxy.haloRadius),
+                minY: Math.min(result.minY, galaxy.y - galaxy.haloRadius - 22),
+                maxY: Math.max(result.maxY, galaxy.y + galaxy.haloRadius + 22)
+            }), { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity });
+            const contentWidth = Math.max(1, bounds.maxX - bounds.minX);
+            const contentHeight = Math.max(1, bounds.maxY - bounds.minY);
+            const availableWidth = Math.max(1, cosmosCanvas.width - paddingX * 2);
+            const availableHeight = Math.max(1, cosmosCanvas.height - paddingTop - paddingBottom);
+            cosmosState.scale = Math.min(1.15, Math.max(0.5,
+                Math.min(availableWidth / contentWidth, availableHeight / contentHeight)
+            ));
+            const centerX = (bounds.minX + bounds.maxX) / 2;
+            const centerY = (bounds.minY + bounds.maxY) / 2;
+            cosmosState.offsetX = cosmosCanvas.width / 2 - centerX * cosmosState.scale;
+            cosmosState.offsetY = paddingTop + availableHeight / 2 - centerY * cosmosState.scale;
         }
 
         function rebuildUniversePlanets() {
-            const categoryCounts = {};
+            const categoryBooks = {};
             booksData.forEach(book => {
                 const category = book.category || '未分类';
-                categoryCounts[category] = (categoryCounts[category] || 0) + 1;
+                if (!categoryBooks[category]) categoryBooks[category] = [];
+                categoryBooks[category].push(book);
             });
-            cosmosState.galaxies = Object.keys(categoryCounts).map(category => ({
+            const categories = Object.keys(categoryBooks).sort((a, b) => {
+                const countDifference = categoryBooks[b].length - categoryBooks[a].length;
+                return countDifference || a.localeCompare(b, 'zh-CN');
+            });
+            cosmosState.galaxies = categories.map((category, index) => ({
                 category,
-                count: categoryCounts[category],
+                count: categoryBooks[category].length,
                 color: getCategoryStyle(category).color,
-                ...getGalaxyCenter(category)
+                ...getGalaxyCenter(index, categories.length),
+                haloRadius: 64
             }));
 
-            cosmosState.planets = booksData.map(book => {
-                const category = book.category || '未分类';
-                const center = getGalaxyCenter(category);
-                const identityHash = stableCosmosHash(`${book.id}|${book.title}|${book.author}`);
-                const angle = ((identityHash % 6283) / 1000) + center.angle;
-                const distance = 34 + ((identityHash >>> 8) % 5) * 15;
-                return {
-                    id: book.id, title: book.title, author: book.author, category, rating: book.rating,
-                    x: center.x + Math.cos(angle) * distance,
-                    y: center.y + Math.sin(angle) * distance,
-                    radius: 12.8,
-                    color: getCategoryStyle(category).color,
-                    driftPhase: (identityHash % 360) * Math.PI / 180,
-                    driftSpeed: 0.18 + ((identityHash >>> 16) % 7) * 0.012
-                };
+            cosmosState.planets = [];
+            cosmosState.galaxies.forEach(galaxy => {
+                const sortedBooks = [...categoryBooks[galaxy.category]].sort((a, b) =>
+                    stableCosmosHash(`${a.id}|${a.title}|${a.author}`) -
+                    stableCosmosHash(`${b.id}|${b.title}|${b.author}`)
+                );
+                let furthestEdge = 0;
+                sortedBooks.forEach((book, index) => {
+                    const identityHash = stableCosmosHash(`${book.id}|${book.title}|${book.author}`);
+                    const angle = galaxy.angle + index * 2.399963229728653;
+                    const distance = index === 0 ? 0 : 34 * Math.sqrt(index);
+                    const radius = 12.8;
+                    furthestEdge = Math.max(furthestEdge, distance + radius);
+                    cosmosState.planets.push({
+                        id: book.id,
+                        title: normalizeBookTitle(book.title),
+                        author: book.author,
+                        category: galaxy.category,
+                        rating: book.rating,
+                        x: galaxy.x + Math.cos(angle) * distance,
+                        y: galaxy.y + Math.sin(angle) * distance,
+                        radius,
+                        color: galaxy.color,
+                        driftPhase: (identityHash % 360) * Math.PI / 180,
+                        driftSpeed: 0.18 + ((identityHash >>> 16) % 7) * 0.012
+                    });
+                });
+                galaxy.haloRadius = Math.max(64, furthestEdge + 24);
             });
 
             const options = document.getElementById('cosmos-book-options');
@@ -3363,11 +3428,12 @@ async function reAnalyzeUniverse() {
                 options.innerHTML = '';
                 booksData.forEach(book => {
                     const option = document.createElement('option');
-                    option.value = book.title;
+                    option.value = normalizeBookTitle(book.title);
                     option.label = `${book.author || '未知作者'} · ${book.category || '未分类'}`;
                     options.appendChild(option);
                 });
             }
+            fitCosmosToContent();
         }
 
         function handleCosmosSearchKey(event) {
@@ -3402,14 +3468,12 @@ async function reAnalyzeUniverse() {
         }
 
         function resetCosmosView() {
-            cosmosState.scale = 1;
-            cosmosState.offsetX = cosmosCanvas.width / 2;
-            cosmosState.offsetY = cosmosCanvas.height / 2;
             cosmosState.hoveredPlanetIndex = null;
             cosmosState.focusedPlanetId = null;
             document.getElementById('cosmos-search-input').value = '';
             document.getElementById('cosmos-search-status').innerText = '按分类形成知识星系';
             document.getElementById('planet-popover').style.display = 'none';
+            fitCosmosToContent();
         }
 
         function renderCosmosGraphics() {
@@ -3420,7 +3484,7 @@ async function reAnalyzeUniverse() {
             cosmosCtx.scale(cosmosState.scale, cosmosState.scale);
 
             cosmosState.galaxies.forEach(galaxy => {
-                const haloRadius = 64 + Math.min(galaxy.count, 8) * 4;
+                const haloRadius = galaxy.haloRadius;
                 const halo = cosmosCtx.createRadialGradient(galaxy.x, galaxy.y, 0, galaxy.x, galaxy.y, haloRadius);
                 halo.addColorStop(0, `${galaxy.color}24`);
                 halo.addColorStop(0.55, `${galaxy.color}10`);
