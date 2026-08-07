@@ -1257,6 +1257,33 @@
         }
 
         @keyframes spin { to { transform: rotate(360deg); } }
+        .ai-status-toast {
+            position: fixed;
+            right: 22px;
+            bottom: 22px;
+            z-index: 3000;
+            max-width: min(360px, calc(100vw - 32px));
+            padding: 11px 14px;
+            border: 1px solid rgba(148, 163, 184, 0.24);
+            border-radius: 12px;
+            background: rgba(15, 23, 42, 0.92);
+            color: #e2e8f0;
+            box-shadow: 0 16px 38px rgba(2, 6, 23, 0.28);
+            backdrop-filter: blur(14px);
+            font-size: 0.82rem;
+            line-height: 1.45;
+            opacity: 0;
+            transform: translateY(10px);
+            pointer-events: none;
+            transition: opacity 0.2s ease, transform 0.2s ease;
+        }
+        .ai-status-toast.active { opacity: 1; transform: translateY(0); }
+        .ai-status-toast[data-tone="warning"] { border-color: rgba(245, 158, 11, 0.45); }
+        .ai-status-toast[data-tone="error"] { border-color: rgba(248, 113, 113, 0.45); }
+        .ai-status-toast[data-tone="success"] { border-color: rgba(52, 211, 153, 0.4); }
+        @media (max-width: 640px) {
+            .ai-status-toast { right: 16px; bottom: 16px; }
+        }
     .auth-btn {
     border: none;
     border-radius: 10px;
@@ -1785,6 +1812,13 @@
         </div>
     </div>
 
+    <div
+        class="ai-status-toast"
+        id="ai-status-toast"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"></div>
+
     <script>
         // =============================
 // Supabase 初始化
@@ -2007,7 +2041,11 @@ async function testAIConnection() {
     setSettingsStatus('正在连接模型…');
     try {
         const settings = validateAISettings(readAISettingsForm());
-        await callAIProvider([{ role: 'user', content: '请只回复：连接成功' }], settings);
+        await callAIProvider(
+            [{ role: 'user', content: '请只回复：连接成功' }],
+            settings,
+            { taskType: 'connection_test', bypassCircuit: true }
+        );
         setSettingsStatus('连接成功，可以保存设置。');
     } catch (error) {
         setSettingsStatus(error.message || '连接失败', true);
@@ -2016,18 +2054,215 @@ async function testAIConnection() {
     }
 }
 
-async function callAIProvider(messages, suppliedSettings = null, options = {}) {
-    const settings = validateAISettings(suppliedSettings || getLocalAISettings());
+const AI_TASK_POLICIES = {
+    connection_test: {
+        label: 'AI 连接测试',
+        timeoutMs: 15000,
+        maxRetries: 0,
+        temperature: 0,
+        webSearch: false
+    },
+    book_overview: {
+        label: '书籍内容概要',
+        timeoutMs: 55000,
+        maxRetries: 1,
+        temperature: 0.35,
+        webSearch: true
+    },
+    note_assistance: {
+        label: '笔记辅助',
+        timeoutMs: 45000,
+        maxRetries: 1,
+        temperature: 0.6,
+        webSearch: false
+    },
+    reading_insight: {
+        label: '阅读洞察',
+        timeoutMs: 50000,
+        maxRetries: 1,
+        temperature: 0.45,
+        webSearch: false
+    },
+    general: {
+        label: 'AI 任务',
+        timeoutMs: 45000,
+        maxRetries: 1,
+        temperature: 0.6,
+        webSearch: false
+    }
+};
+
+const AI_CIRCUIT_FAILURE_THRESHOLD = 3;
+const AI_CIRCUIT_COOLDOWN_MS = 5 * 60 * 1000;
+let aiStatusToastTimer = null;
+
+class AIProviderError extends Error {
+    constructor(message, { code = 'UNKNOWN', status = 0, retryable = false, providerMessage = '', retryAfterMs = 0 } = {}) {
+        super(message);
+        this.name = 'AIProviderError';
+        this.code = code;
+        this.status = status;
+        this.retryable = retryable;
+        this.providerMessage = providerMessage;
+        this.retryAfterMs = retryAfterMs;
+    }
+}
+
+function getAITaskPolicy(taskType) {
+    return AI_TASK_POLICIES[taskType] || AI_TASK_POLICIES.general;
+}
+
+function getAIHealthStorageKey() {
+    const owner = currentUser?.id || 'guest';
+    return `reading_cosmos_ai_health:${owner}`;
+}
+
+function readAIHealthState() {
+    try {
+        const state = JSON.parse(localStorage.getItem(getAIHealthStorageKey()) || '{}');
+        const now = Date.now();
+        Object.keys(state).forEach(key => {
+            if (!state[key] || (state[key].circuitUntil || 0) < now && !(state[key].failureCount > 0)) {
+                delete state[key];
+            }
+        });
+        return state;
+    } catch (error) {
+        console.warn('AI 服务健康状态无法读取，已重新初始化', error);
+        return {};
+    }
+}
+
+function writeAIHealthState(state) {
+    try {
+        localStorage.setItem(getAIHealthStorageKey(), JSON.stringify(state));
+    } catch (error) {
+        console.warn('AI 服务健康状态无法保存', error);
+    }
+}
+
+function getAIProviderHealthKey(settings) {
+    return `${settings.provider}|${settings.baseUrl}|${settings.model}`;
+}
+
+function getOpenCircuitUntil(settings) {
+    const state = readAIHealthState();
+    const entry = state[getAIProviderHealthKey(settings)];
+    return Number(entry?.circuitUntil || 0) > Date.now()
+        ? Number(entry.circuitUntil)
+        : 0;
+}
+
+function markAIProviderSuccess(settings) {
+    const state = readAIHealthState();
+    const key = getAIProviderHealthKey(settings);
+    if (state[key]) {
+        delete state[key];
+        writeAIHealthState(state);
+    }
+}
+
+function markAIProviderFailure(settings, error) {
+    if (!error.retryable) return 0;
+    const state = readAIHealthState();
+    const key = getAIProviderHealthKey(settings);
+    const previous = state[key] || { failureCount: 0, circuitUntil: 0 };
+    const failureCount = Number(previous.failureCount || 0) + 1;
+    const circuitUntil = failureCount >= AI_CIRCUIT_FAILURE_THRESHOLD
+        ? Date.now() + AI_CIRCUIT_COOLDOWN_MS
+        : 0;
+    state[key] = { failureCount, circuitUntil, lastErrorCode: error.code, updatedAt: Date.now() };
+    writeAIHealthState(state);
+    return circuitUntil;
+}
+
+function showAIStatus(message, tone = 'info', durationMs = 3600) {
+    const node = document.getElementById('ai-status-toast');
+    if (!node) return;
+    clearTimeout(aiStatusToastTimer);
+    node.textContent = message;
+    node.dataset.tone = tone;
+    node.classList.add('active');
+    aiStatusToastTimer = setTimeout(() => node.classList.remove('active'), durationMs);
+}
+
+function notifyAIRequestStatus(options, phase, detail = {}) {
+    if (typeof options.onStatus === 'function') {
+        options.onStatus({ phase, ...detail });
+    }
+}
+
+function getSafeAIErrorMessage(error) {
+    const messages = {
+        AUTH: 'API Key 无效或没有调用权限，请在设置中心检查配置',
+        RATE_LIMIT: 'AI 服务当前繁忙，已保留你的内容，请稍后重试',
+        TIMEOUT: 'AI 服务响应超时，已保留你的内容，请稍后重试',
+        NETWORK: '暂时无法连接 AI 服务，请检查网络后重试',
+        UNAVAILABLE: 'AI 服务暂时不可用，已保留你的内容，请稍后重试',
+        INVALID_RESPONSE: 'AI 返回内容无法识别，本次结果未保存，请稍后重试',
+        POLICY: '当前请求无法由该模型处理，请调整内容或更换模型',
+        BUDGET: '模型额度或账户余额不足，请检查服务商账户',
+        CIRCUIT_OPEN: error.message,
+        REQUEST: 'AI 请求配置有误，请检查模型名称和接口地址'
+    };
+    return messages[error.code] || 'AI 请求失败，已保留你的内容，请稍后重试';
+}
+
+function classifyAIResponseError(response, payload) {
+    const status = Number(response.status || 0);
+    const providerMessage = String(payload?.error?.message || payload?.message || '').trim();
+    const normalizedMessage = providerMessage.toLocaleLowerCase();
+    const retryAfterSeconds = Number(response.headers.get('retry-after') || 0);
+    const retryAfterMs = Number.isFinite(retryAfterSeconds) ? retryAfterSeconds * 1000 : 0;
+
+    if (status === 401 || status === 403) {
+        return new AIProviderError('', { code: 'AUTH', status, providerMessage });
+    }
+    if (/insufficient.*(credit|quota)|quota exceeded|余额不足|额度不足/.test(normalizedMessage)) {
+        return new AIProviderError('', { code: 'BUDGET', status, providerMessage });
+    }
+    if (status === 429 || /rate.?limit|too many|繁忙|过多|限流/.test(normalizedMessage)) {
+        return new AIProviderError('', { code: 'RATE_LIMIT', status, retryable: true, providerMessage, retryAfterMs });
+    }
+    if (status === 408) {
+        return new AIProviderError('', { code: 'TIMEOUT', status, retryable: true, providerMessage });
+    }
+    if (status >= 500) {
+        return new AIProviderError('', { code: 'UNAVAILABLE', status, retryable: true, providerMessage });
+    }
+    if (/moderation|content.?policy|审核|安全策略/.test(normalizedMessage)) {
+        return new AIProviderError('', { code: 'POLICY', status, providerMessage });
+    }
+    return new AIProviderError('', { code: 'REQUEST', status, providerMessage });
+}
+
+function normalizeAIRequestError(error) {
+    if (error instanceof AIProviderError) return error;
+    if (error?.name === 'AbortError') {
+        return new AIProviderError('', { code: 'TIMEOUT', retryable: true });
+    }
+    if (error instanceof TypeError) {
+        return new AIProviderError('', { code: 'NETWORK', retryable: true, providerMessage: error.message });
+    }
+    return new AIProviderError('', { code: 'UNKNOWN', providerMessage: error?.message || '' });
+}
+
+function waitForAIRetry(delayMs) {
+    return new Promise(resolve => setTimeout(resolve, delayMs));
+}
+
+async function performAIProviderAttempt(messages, settings, policy, options) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 45000);
+    const timeout = setTimeout(() => controller.abort(), policy.timeoutMs);
     try {
         const requestBody = {
             model: settings.model,
             messages,
-            temperature: 0.6,
+            temperature: policy.temperature,
             stream: false
         };
-        if (options.webSearch && settings.provider === 'glm') {
+        const shouldUseWebSearch = options.webSearch ?? policy.webSearch;
+        if (shouldUseWebSearch && settings.provider === 'glm') {
             requestBody.tools = [{
                 type: 'web_search',
                 web_search: {
@@ -2041,6 +2276,7 @@ async function callAIProvider(messages, suppliedSettings = null, options = {}) {
             }];
             requestBody.tool_choice = 'auto';
         }
+
         const response = await fetch(settings.baseUrl, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${settings.apiKey}`, 'Content-Type': 'application/json' },
@@ -2048,15 +2284,14 @@ async function callAIProvider(messages, suppliedSettings = null, options = {}) {
             signal: controller.signal
         });
         const payload = await response.json().catch(() => ({}));
-        if (!response.ok) {
-            const detail = payload?.error?.message || payload?.message || `HTTP ${response.status}`;
-            throw new Error(`模型请求失败：${detail}`);
-        }
+        if (!response.ok) throw classifyAIResponseError(response, payload);
+
         const content = payload?.choices?.[0]?.message?.content;
-        if (typeof content !== 'string' || !content.trim()) throw new Error('模型返回了无法识别的空响应');
+        if (typeof content !== 'string' || !content.trim()) {
+            throw new AIProviderError('', { code: 'INVALID_RESPONSE', retryable: true });
+        }
         return {
             content: content.trim(),
-            settings,
             sources: Array.isArray(payload.web_search)
                 ? payload.web_search.map(source => ({
                     title: source.title || '',
@@ -2066,13 +2301,88 @@ async function callAIProvider(messages, suppliedSettings = null, options = {}) {
                 }))
                 : []
         };
-    } catch (error) {
-        if (error.name === 'AbortError') throw new Error('模型请求超时，请检查网络或接口地址');
-        if (error instanceof TypeError) throw new Error('无法连接模型接口，请检查网络、地址或浏览器跨域限制');
-        throw error;
     } finally {
         clearTimeout(timeout);
     }
+}
+
+async function callAIProvider(messages, suppliedSettings = null, options = {}) {
+    const settings = validateAISettings(suppliedSettings || getLocalAISettings());
+    const taskType = options.taskType || 'general';
+    const policy = getAITaskPolicy(taskType);
+    const requestId = crypto.randomUUID ? crypto.randomUUID() : `ai-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const circuitUntil = options.bypassCircuit ? 0 : getOpenCircuitUntil(settings);
+    if (circuitUntil) {
+        const remainingMinutes = Math.max(1, Math.ceil((circuitUntil - Date.now()) / 60000));
+        const circuitError = new AIProviderError(
+            `AI 服务连续失败，已进入冷却状态，请约 ${remainingMinutes} 分钟后重试`,
+            { code: 'CIRCUIT_OPEN' }
+        );
+        notifyAIRequestStatus(options, 'circuit_open', { taskType, requestId, circuitUntil });
+        showAIStatus(circuitError.message, 'warning', 5000);
+        throw circuitError;
+    }
+
+    notifyAIRequestStatus(options, 'started', { taskType, requestId, label: policy.label });
+    let finalError = null;
+    for (let attempt = 0; attempt <= policy.maxRetries; attempt++) {
+        try {
+            const result = await performAIProviderAttempt(messages, settings, policy, options);
+            markAIProviderSuccess(settings);
+            notifyAIRequestStatus(options, 'succeeded', { taskType, requestId, attempt: attempt + 1 });
+            if (attempt > 0) showAIStatus(`${policy.label}已在重试后恢复`, 'success');
+            return {
+                ...result,
+                settings,
+                taskType,
+                requestId,
+                attempts: attempt + 1
+            };
+        } catch (rawError) {
+            const error = normalizeAIRequestError(rawError);
+            finalError = error;
+            console.warn('AI request attempt failed', {
+                requestId,
+                taskType,
+                attempt: attempt + 1,
+                code: error.code,
+                status: error.status,
+                providerMessage: error.providerMessage
+            });
+            const canRetry = error.retryable && attempt < policy.maxRetries;
+            if (!canRetry) break;
+
+            const jitterMs = 650 + Math.floor(Math.random() * 550);
+            const delayMs = Math.min(5000, Math.max(jitterMs, error.retryAfterMs || 0));
+            notifyAIRequestStatus(options, 'retrying', {
+                taskType,
+                requestId,
+                attempt: attempt + 2,
+                delayMs,
+                errorCode: error.code
+            });
+            showAIStatus(`${policy.label}暂时繁忙，正在自动重试…`, 'warning');
+            await waitForAIRetry(delayMs);
+        }
+    }
+
+    const circuitOpenedUntil = options.bypassCircuit
+        ? 0
+        : markAIProviderFailure(settings, finalError);
+    const safeMessage = getSafeAIErrorMessage(finalError);
+    finalError.message = safeMessage;
+    notifyAIRequestStatus(options, 'failed', {
+        taskType,
+        requestId,
+        errorCode: finalError.code,
+        circuitUntil: circuitOpenedUntil || null
+    });
+    showAIStatus(
+        circuitOpenedUntil ? `${safeMessage}；系统已暂时停止重复请求` : safeMessage,
+        finalError.code === 'AUTH' ? 'error' : 'warning',
+        5200
+    );
+    throw finalError;
 }
         
 // =============================
@@ -2922,7 +3232,7 @@ function getCategoryStyle(cat) {
                 const result = await callAIProvider(
                     buildBookOverviewMessages(book),
                     settings,
-                    { webSearch: true }
+                    { taskType: 'book_overview', webSearch: true }
                 );
                 book.aiData = book.aiData || {};
                 book.aiData.overview = {
@@ -2932,6 +3242,8 @@ function getCategoryStyle(cat) {
                     generatedAt: new Date().toISOString(),
                     provider: result.settings.provider,
                     model: result.settings.model,
+                    requestId: result.requestId,
+                    attempts: result.attempts,
                     sources: result.sources
                 };
                 summaryText.innerText = getBookSummaryText(book) || '暂无概要';
@@ -3202,7 +3514,11 @@ function getCategoryStyle(cat) {
             const mask = document.getElementById(`mod-${field}-text`).closest('.detail-module').querySelector('.ai-loading-mask');
             mask.classList.add('active');
             try {
-                const result = await callAIProvider(buildBookAIMessages(book, field, op), settings);
+                const result = await callAIProvider(
+                    buildBookAIMessages(book, field, op),
+                    settings,
+                    { taskType: 'note_assistance' }
+                );
                 book.aiData = book.aiData || {};
                 book.aiData[field] = {
                     content: result.content,
@@ -3212,7 +3528,9 @@ function getCategoryStyle(cat) {
                     generatedAt:
                         new Date().toISOString(),
                     provider: result.settings.provider,
-                    model: result.settings.model
+                    model: result.settings.model,
+                    requestId: result.requestId,
+                    attempts: result.attempts
                 };
 
                 renderAIOutput(
@@ -3308,7 +3626,7 @@ async function reAnalyzeUniverse() {
                 role: 'user',
                 content: `请重新分析我的阅读宇宙：\n${JSON.stringify(readingContext)}`
             }
-        ], settings);
+        ], settings, { taskType: 'reading_insight' });
         document.getElementById('report-ceremony-text').innerText = result.content;
         alert('阅读数据与 AI 洞察已重新分析完成');
     } catch (error) {
