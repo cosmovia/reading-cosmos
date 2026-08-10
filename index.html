@@ -1644,6 +1644,25 @@
 </section>
     </main>
 
+    <div class="modal-overlay" id="auth-modal" onclick="handleAuthOutsideClick(event)">
+        <form class="modal-box" onsubmit="submitAuthForm(event)">
+            <div class="modal-title" id="auth-modal-title">登录 Reading Cosmos</div>
+            <div class="form-group">
+                <label for="auth-email">邮箱</label>
+                <input type="email" id="auth-email" class="form-input" autocomplete="email" required placeholder="name@example.com">
+            </div>
+            <div class="form-group">
+                <label for="auth-password">密码</label>
+                <input type="password" id="auth-password" class="form-input" autocomplete="current-password" minlength="6" required placeholder="至少 6 位">
+            </div>
+            <div class="settings-status" id="auth-status" role="status" aria-live="polite"></div>
+            <div class="modal-buttons">
+                <button type="button" class="btn-secondary" onclick="closeAuthModal()" style="background:#f1f5f9; border:none; padding:10px 16px; border-radius:8px; cursor:pointer;">取消</button>
+                <button type="submit" class="btn-primary" id="auth-submit-btn">登录</button>
+            </div>
+        </form>
+    </div>
+
     <div class="modal-overlay" id="add-book-modal">
         <div class="modal-box">
             <div class="modal-title">探索新思想星球 🪐</div>
@@ -1843,37 +1862,39 @@ console.log('Supabase Client Ready');
 // 注册
 // =============================
 
+let authModalMode = 'login';
+
+function setAuthStatus(message, isError = false) {
+    const node = document.getElementById('auth-status');
+    node.textContent = message || '';
+    node.style.color = isError ? '#b91c1c' : '#0369a1';
+}
+
+function openAuthModal(mode) {
+    authModalMode = mode === 'register' ? 'register' : 'login';
+    document.getElementById('auth-modal-title').textContent =
+        authModalMode === 'register' ? '注册 Reading Cosmos' : '登录 Reading Cosmos';
+    document.getElementById('auth-submit-btn').textContent =
+        authModalMode === 'register' ? '创建账号' : '登录';
+    const password = document.getElementById('auth-password');
+    password.autocomplete = authModalMode === 'register' ? 'new-password' : 'current-password';
+    document.getElementById('auth-email').value = '';
+    password.value = '';
+    setAuthStatus('');
+    document.getElementById('auth-modal').classList.add('active');
+    document.getElementById('auth-email').focus();
+}
+
+function closeAuthModal() {
+    document.getElementById('auth-modal').classList.remove('active');
+}
+
+function handleAuthOutsideClick(event) {
+    if (event.target.id === 'auth-modal') closeAuthModal();
+}
+
 async function showRegister() {
-
-    const email = prompt("请输入邮箱");
-
-    if (!email) return;
-
-    const password = prompt("请输入密码（至少6位）");
-
-    if (!password) return;
-
-    const { data, error } =
-    await supabaseClient.auth.signUp({
-        email,
-        password
-    });
-
-    if (error) {
-
-        alert(error.message);
-
-        return;
-    }
-
-    if (data.session && data.user) {
-        await activateAuthenticatedShelf(data.user);
-        alert("注册成功，你的书架现在是空的");
-    } else {
-        showGuestShelf();
-        await checkLoginStatus();
-        alert("注册成功，请完成邮箱验证后登录");
-    }
+    openAuthModal('register');
 }
 
 // =============================
@@ -1881,31 +1902,46 @@ async function showRegister() {
 // =============================
 
 async function showLogin() {
+    openAuthModal('login');
+}
 
-    const email = prompt("请输入邮箱");
-
-    if (!email) return;
-
-    const password = prompt("请输入密码");
-
-    if (!password) return;
-
-    const { data, error } =
-    await supabaseClient.auth.signInWithPassword({
-        email,
-        password
-    });
-
-    if (error) {
-
-        alert(error.message);
-
+async function submitAuthForm(event) {
+    event.preventDefault();
+    const email = document.getElementById('auth-email').value.trim();
+    const password = document.getElementById('auth-password').value;
+    const button = document.getElementById('auth-submit-btn');
+    if (!email || password.length < 6) {
+        setAuthStatus('请输入有效邮箱和至少 6 位密码', true);
         return;
     }
 
-    alert("登录成功");
-
-    await activateAuthenticatedShelf(data.user);
+    button.disabled = true;
+    setAuthStatus(authModalMode === 'register' ? '正在创建账号…' : '正在登录…');
+    try {
+        if (authModalMode === 'register') {
+            const { data, error } = await supabaseClient.auth.signUp({ email, password });
+            if (error) throw error;
+            closeAuthModal();
+            if (data.session && data.user) {
+                await activateAuthenticatedShelf(data.user);
+                showAIStatus('注册成功，你的书架现在是空的', 'success', 5000);
+            } else {
+                showGuestShelf();
+                await checkLoginStatus();
+                showAIStatus('注册成功，请完成邮箱验证后登录', 'success', 6000);
+            }
+        } else {
+            const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+            if (error) throw error;
+            closeAuthModal();
+            await activateAuthenticatedShelf(data.user);
+            showAIStatus('登录成功', 'success');
+        }
+    } catch (error) {
+        setAuthStatus(error.message || '操作失败，请稍后重试', true);
+    } finally {
+        button.disabled = false;
+    }
 }
 // =============================
 // 退出
