@@ -1767,7 +1767,7 @@
                     </div>
                     <div class="module-content-text" id="mod-summary-text"></div>
                     <div class="ai-output-panel" id="mod-summary-ai-output">
-                        <div class="ai-output-label" id="mod-summary-ai-label">AI 思考建议 · 独立保存</div>
+                        <div class="ai-output-label" id="mod-summary-ai-label">AI 思考建议 · 仅当前编辑会话</div>
                         <div class="ai-output-content" id="mod-summary-ai-content"></div>
                     </div>
                 </div>
@@ -2605,7 +2605,7 @@ async function syncBooksToSupabase() {
             notes_revision:
                 Number(book.notesRevision || 0),
             ai_data:
-                book.aiData || {},
+                sanitizeBookAIData(book.aiData),
 
             updated_at:
                 new Date().toISOString()
@@ -2720,10 +2720,7 @@ async function loadBooksFromSupabase(user = currentUser) {
             Number(book.notes_revision || 0),
 
         aiData:
-            book.ai_data &&
-            typeof book.ai_data === 'object'
-                ? book.ai_data
-                : {}
+            sanitizeBookAIData(book.ai_data)
 
     }));
 
@@ -2785,9 +2782,19 @@ async function loadBooksFromSupabase(user = currentUser) {
         let currentUser = null;
         let currentView = 'shelf';
         let activeBookId = null;
+        const transientNoteAISuggestions = new Map();
         let isEditing = false;
         let pendingNoteSaveTimer = null;
         let pendingNoteBookId = null;
+
+        function getTransientNoteSuggestion(bookId, field) {
+            return transientNoteAISuggestions.get(`${bookId}:${field}`) || null;
+        }
+
+        function clearTransientNoteSuggestions(bookId) {
+            ['summary', 'concepts', 'thoughts', 'actions']
+                .forEach(field => transientNoteAISuggestions.delete(`${bookId}:${field}`));
+        }
 
         const NOTE_METHODS = {
             first_principles: {
@@ -2862,7 +2869,7 @@ async function loadBooksFromSupabase(user = currentUser) {
 
             label.innerText = isStale
                 ? 'AI 思考建议 · 基于旧版本笔记'
-                : 'AI 思考建议 · 独立保存，不会覆盖你的笔记';
+                : 'AI 思考建议 · 仅当前编辑会话，不会覆盖你的笔记';
             panel.classList.toggle('active', Boolean(text) && isEditing);
         }
 
@@ -2875,6 +2882,13 @@ async function loadBooksFromSupabase(user = currentUser) {
                 book.aiData?.overview?.content ||
                 legacyAutomaticSummary ||
                 '';
+        }
+
+        function sanitizeBookAIData(aiData) {
+            const clean = aiData && typeof aiData === 'object' ? { ...aiData } : {};
+            ['concepts', 'thoughts', 'actions'].forEach(field => delete clean[field]);
+            if (clean.summary?.operation !== 'auto_summary') delete clean.summary;
+            return clean;
         }
 
         function createDemoBooks() {
@@ -3437,7 +3451,7 @@ function getCategoryStyle(cat) {
                 .forEach(field => {
                     renderAIOutput(
                         field,
-                        book.aiData?.[field],
+                        getTransientNoteSuggestion(book.id, field),
                         book.notesRevision
                     );
                 });
@@ -3463,6 +3477,7 @@ function getCategoryStyle(cat) {
 
         async function closeBookDetailPanel() {
             await flushPendingNoteSave();
+            if (activeBookId) clearTransientNoteSuggestions(activeBookId);
             document.getElementById('book-detail-overlay').classList.remove('active');
         }
         function handleOverlayOutsideClick(e) { if(e.target.id === 'book-detail-overlay') closeBookDetailPanel(); }
@@ -3501,7 +3516,7 @@ function getCategoryStyle(cat) {
 
             if (book) {
                 ['summary', 'concepts', 'thoughts', 'actions'].forEach(field => {
-                    renderAIOutput(field, book.aiData?.[field], book.notesRevision);
+                    renderAIOutput(field, getTransientNoteSuggestion(book.id, field), book.notesRevision);
                 });
             }
         }
@@ -3511,6 +3526,7 @@ function getCategoryStyle(cat) {
 
             if (isEditing) {
                 await flushPendingNoteSave();
+                if (activeBookId) clearTransientNoteSuggestions(activeBookId);
             }
 
             isEditing = !isEditing;
@@ -3551,13 +3567,14 @@ function getCategoryStyle(cat) {
 
             book.notesRevision =
                 Number(book.notesRevision || 0) + 1;
+            clearTransientNoteSuggestions(book.id);
 
             if (book.id === activeBookId) {
                 ['summary', 'concepts', 'thoughts', 'actions']
                     .forEach(field => {
                         renderAIOutput(
                             field,
-                            book.aiData?.[field],
+                            getTransientNoteSuggestion(book.id, field),
                             book.notesRevision
                         );
                     });
@@ -3582,13 +3599,14 @@ function getCategoryStyle(cat) {
                 );
             book.notesRevision =
                 Number(book.notesRevision || 0) + 1;
+            clearTransientNoteSuggestions(book.id);
 
             applyNoteMethodUI(book);
             ['summary', 'concepts', 'thoughts', 'actions']
                 .forEach(field => {
                     renderAIOutput(
                         field,
-                        book.aiData?.[field],
+                        getTransientNoteSuggestion(book.id, field),
                         book.notesRevision
                     );
                 });
@@ -3603,41 +3621,57 @@ function getCategoryStyle(cat) {
 
             const book = booksData.find(b => b.id === activeBookId);
             if (!book) return;
-            const settings = getLocalAISettings();
-            if (!settings.apiKey) {
-                alert('请先在设置中心配置 AI Provider 与 API Key');
-                await showSettings();
+            try {
+                if (!await ensureNoteAIConsent()) return;
+            } catch (error) {
+                alert(error.message || '暂时无法保存 AI 数据处理确认，请稍后重试');
+                return;
+            }
+            if (!book.cloudId) await syncBooksToSupabase();
+            if (!book.cloudId) {
+                alert('书籍尚未完成云同步，请检查网络后重试');
                 return;
             }
 
             const mask = document.getElementById(`mod-${field}-text`).closest('.detail-module').querySelector('.ai-loading-mask');
             mask.classList.add('active');
             try {
-                const result = await callAIProvider(
-                    buildBookAIMessages(book, field, op),
-                    settings,
-                    { taskType: 'note_assistance' }
-                );
-                book.aiData = book.aiData || {};
-                book.aiData[field] = {
-                    content: result.content,
+                const { data, error } = await supabaseClient.functions.invoke('ai-gateway', {
+                    body: {
+                        taskType: 'note_assistance',
+                        bookId: book.cloudId,
+                        field,
+                        operation: op
+                    }
+                });
+                if (error || data?.error) {
+                    let detail = data?.error || null;
+                    if (!detail && error?.context instanceof Response) {
+                        detail = await error.context.clone().json().then(payload => payload?.error).catch(() => null);
+                    }
+                    throw new Error(detail?.message || 'AI 笔记辅助暂时不可用，请稍后重试');
+                }
+                const suggestion = {
+                    content: data?.suggestion?.content || '',
                     operation: op,
                     notesRevision:
                         Number(book.notesRevision || 0),
                     generatedAt:
-                        new Date().toISOString(),
-                    provider: result.settings.provider,
-                    model: result.settings.model,
-                    requestId: result.requestId,
-                    attempts: result.attempts
+                        data?.suggestion?.generatedAt || new Date().toISOString(),
+                    provider: data?.suggestion?.provider || 'managed_gateway',
+                    model: data?.suggestion?.model || '',
+                    requestId: data?.requestId,
+                    attempts: Number(data?.attempts || 1)
                 };
+                if (!suggestion.content) throw new Error('AI 返回内容无法识别，本次结果未保存');
+                transientNoteAISuggestions.set(`${book.id}:${field}`, suggestion);
 
                 renderAIOutput(
                     field,
-                    book.aiData[field],
+                    suggestion,
                     book.notesRevision
                 );
-                await saveToLocalStorage();
+                showAIStatus(`AI 建议已生成，今日还可使用 ${Number(data?.remaining || 0)} 次`, 'success', 5000);
             } catch (error) {
                 alert(error.message || 'AI 请求失败，请稍后重试');
             } finally {
@@ -3645,32 +3679,26 @@ function getCategoryStyle(cat) {
             }
         }
 
-        function buildBookAIMessages(book, field, operation) {
-            const fieldLabels = {
-                summary: '全书摘要',
-                concepts: '核心问题或角色线索',
-                thoughts: '核心概念或阅读共鸣',
-                actions: '底层原理或行动启发'
-            };
-            const operationInstructions = {
-                regenerate: '给出一份独立的 AI 建议，不冒充用户结论。',
-                generate: '补充新的分析视角，指出它与用户原笔记的关系。',
-                polish: '只提出结构、表达与论证的修改建议，不直接改写或覆盖用户笔记。'
-            };
-            const notes = ['summary', 'concepts', 'thoughts', 'actions']
-                .map(key => `${fieldLabels[key]}：${book[key]?.trim() || '（用户尚未记录）'}`)
-                .join('\n');
-            const noteMethod = normalizeNoteMethod(book.noteMethod, book.category);
-            return [
-                {
-                    role: 'system',
-                    content: '你是 Reading Cosmos 的阅读思考助手。用户笔记永远高于 AI 输出。你必须明确区分事实、用户观点与 AI 建议；不得虚构书中内容，不得声称已读过未提供的原文；用简洁中文回答。'
-                },
-                {
-                    role: 'user',
-                    content: `请处理“${fieldLabels[field]}”模块。\n任务：${operationInstructions[operation] || operationInstructions.generate}\n\n书籍：${book.title}\n作者：${book.author || '未知'}\n分类：${book.category || '未分类'}\n评分：${book.rating || 0}/5\n笔记方法：${noteMethod}\n笔记版本：${Number(book.notesRevision || 0)}\n\n用户保存的笔记：\n${notes}\n\n请输出可单独展示在“AI 独立建议”区域的内容，不要复述系统规则。`
-                }
-            ];
+        async function ensureNoteAIConsent() {
+            const { data, error } = await supabaseClient
+                .from('user_settings')
+                .select('ai_note_consent_at')
+                .eq('user_id', currentUser.id)
+                .maybeSingle();
+            if (error) throw error;
+            if (data?.ai_note_consent_at) return true;
+            const accepted = confirm(
+                '使用笔记 AI 辅助时，当前书籍信息和已保存的笔记片段将发送给当前平台模型服务商处理。Reading Cosmos 不保存 AI 建议正文，建议只在本次编辑会话中显示。是否继续？'
+            );
+            if (!accepted) return false;
+            const consentAt = new Date().toISOString();
+            const { error: saveError } = await supabaseClient.from('user_settings').upsert({
+                user_id: currentUser.id,
+                ai_note_consent_at: consentAt,
+                updated_at: consentAt
+            });
+            if (saveError) throw saveError;
+            return true;
         }
 
         function refreshInsightCard(btnElement, cardType) {
