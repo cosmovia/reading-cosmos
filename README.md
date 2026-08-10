@@ -10,6 +10,8 @@ Reading Cosmos Pro MAX 是一个 AI 驱动的阅读管理系统。
 
 Gateway 已具备多模型路由、限流重试与熔断结构，当前生产路由仅启用 GLM，不会在用户不知情时把内容发送给其他模型服务商。
 
+设置中心会通过不调用模型的 `service_status` 任务展示当前平台模型、服务状态、两类每日额度及刷新时间。该状态查询不会写入生成记录或消耗额度。限流、超时、熔断冷却与平台配置异常会转换为用户可行动的提示；个人 BYOK 目前仅作为书籍概要的可选替代，并继续服务于尚未迁移到 Gateway 的数据洞察功能。
+
 部署前须在 Supabase Dashboard 的 Edge Function Secrets 中配置：
 
 - `GLM_API_KEY`：平台智谱 API Key，禁止提交到 Git。

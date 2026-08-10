@@ -1,5 +1,5 @@
 import "jsr:@supabase/functions-js@2.5.0/edge-runtime.d.ts";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 const TASK_TYPES = ["book_overview", "note_assistance"] as const;
 type TaskType = typeof TASK_TYPES[number];
@@ -34,6 +34,8 @@ type GatewayBody = {
   field?: string;
   operation?: string;
 };
+
+type UsageStatus = { limit: number; used: number; remaining: number };
 
 type ProviderResult = Awaited<ReturnType<typeof callGlm>> & { attempts: number };
 
@@ -73,6 +75,32 @@ function providerFailure(
   retryAfterMs = 0,
 ): ProviderFailure {
   return Object.assign(new Error(code), { code, status, retryable, retryAfterMs });
+}
+
+function nextUtcDayStart(): string {
+  const next = new Date();
+  next.setUTCDate(next.getUTCDate() + 1);
+  next.setUTCHours(0, 0, 0, 0);
+  return next.toISOString();
+}
+
+async function getDailyUsage(
+  adminClient: SupabaseClient<any, "public", any>,
+  userId: string,
+  taskType: TaskType,
+  dayStart: string,
+): Promise<UsageStatus> {
+  const { count, error } = await adminClient
+    .from("ai_generations")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", userId)
+    .eq("task_type", taskType)
+    .eq("cache_hit", false)
+    .gte("created_at", dayStart);
+  if (error) throw error;
+  const used = count ?? 0;
+  const limit = DAILY_GENERATION_LIMIT[taskType];
+  return { limit, used, remaining: Math.max(0, limit - used) };
 }
 
 function classifyProviderResponse(response: Response, payload: Record<string, unknown>): ProviderFailure {
@@ -305,6 +333,33 @@ Deno.serve(async (req: Request) => {
   } catch {
     return jsonResponse({ requestId, error: { code: "INVALID_REQUEST", message: "请求格式无效" } }, 400);
   }
+  if (body.taskType === "service_status") {
+    const dayStart = new Date();
+    dayStart.setUTCHours(0, 0, 0, 0);
+    try {
+      const [bookOverview, noteAssistance, settingsResult] = await Promise.all([
+        getDailyUsage(adminClient, userData.user.id, "book_overview", dayStart.toISOString()),
+        getDailyUsage(adminClient, userData.user.id, "note_assistance", dayStart.toISOString()),
+        userClient.from("user_settings").select("ai_note_consent_at").eq("user_id", userData.user.id).maybeSingle(),
+      ]);
+      if (settingsResult.error) throw settingsResult.error;
+      const circuitOpen = providerCircuit.openUntil > Date.now();
+      return jsonResponse({
+        requestId,
+        gateway: {
+          status: !glmApiKey ? "not_configured" : circuitOpen ? "cooling_down" : "available",
+          activeProvider: PROVIDER,
+          activeModel: model,
+          fallbackEnabled: PROVIDER_ROUTES.length > 1,
+          availableAt: circuitOpen ? new Date(providerCircuit.openUntil).toISOString() : null,
+        },
+        quota: { bookOverview, noteAssistance, resetsAt: nextUtcDayStart() },
+        consent: { noteAssistance: Boolean(settingsResult.data?.ai_note_consent_at) },
+      });
+    } catch {
+      return jsonResponse({ requestId, error: { code: "DATABASE", message: "暂时无法读取平台 AI 状态" } }, 500);
+    }
+  }
   if (!TASK_TYPES.includes(body.taskType as TaskType) || !body.bookId) {
     return jsonResponse({ requestId, error: { code: "INVALID_REQUEST", message: "不支持的 AI 任务" } }, 400);
   }
@@ -376,19 +431,24 @@ Deno.serve(async (req: Request) => {
 
   const dayStart = new Date();
   dayStart.setUTCHours(0, 0, 0, 0);
-  const { count: dailyCount, error: quotaError } = await adminClient
-    .from("ai_generations")
-    .select("id", { count: "exact", head: true })
-    .eq("user_id", userData.user.id)
-    .eq("task_type", taskType)
-    .eq("cache_hit", false)
-    .gte("created_at", dayStart.toISOString());
-  if (quotaError) return jsonResponse({ requestId, error: { code: "DATABASE", message: "暂时无法检查 AI 额度" } }, 500);
-  const dailyLimit = DAILY_GENERATION_LIMIT[taskType];
-  if ((dailyCount ?? 0) >= dailyLimit) {
+  let dailyUsage: UsageStatus;
+  try {
+    dailyUsage = await getDailyUsage(adminClient, userData.user.id, taskType, dayStart.toISOString());
+  } catch {
+    return jsonResponse({ requestId, error: { code: "DATABASE", message: "暂时无法检查 AI 额度" } }, 500);
+  }
+  const dailyLimit = dailyUsage.limit;
+  const dailyCount = dailyUsage.used;
+  if (dailyUsage.remaining <= 0) {
     return jsonResponse({
       requestId,
-      error: { code: "DAILY_LIMIT", message: `今日${taskType === "book_overview" ? "概要生成" : "笔记辅助"}已达到 ${dailyLimit} 次，请明天再试` },
+      error: {
+        code: "DAILY_LIMIT",
+        message: `今日${taskType === "book_overview" ? "概要生成" : "笔记辅助"}已达到 ${dailyLimit} 次`,
+        limit: dailyLimit,
+        remaining: 0,
+        availableAt: nextUtcDayStart(),
+      },
     }, 429);
   }
   if (!glmApiKey) {
@@ -457,7 +517,7 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({
         requestId,
         attempts: result.attempts,
-        remaining: Math.max(0, dailyLimit - (dailyCount ?? 0) - 1),
+        remaining: Math.max(0, dailyLimit - dailyCount - 1),
         suggestion: { content: result.content, provider: PROVIDER, model: routedModel, generatedAt, promptVersion },
       });
     }
@@ -465,7 +525,7 @@ Deno.serve(async (req: Request) => {
       requestId,
       cacheHit: false,
       attempts: result.attempts,
-      remaining: Math.max(0, dailyLimit - (dailyCount ?? 0) - 1),
+      remaining: Math.max(0, dailyLimit - dailyCount - 1),
       artifact: {
         id: artifactId,
         content: result.content,
@@ -494,7 +554,17 @@ Deno.serve(async (req: Request) => {
       attempts: 1,
     });
     const responseStatus = failure.code === "RATE_LIMIT" ? 429 : failure.code === "TIMEOUT" ? 504 : 503;
-    return jsonResponse({ requestId, error: { code: failure.code, message: safeErrorMessage(failure.code) } }, responseStatus);
+    return jsonResponse({
+      requestId,
+      error: {
+        code: failure.code,
+        message: safeErrorMessage(failure.code),
+        retryAfterSeconds: failure.retryAfterMs > 0 ? Math.ceil(failure.retryAfterMs / 1000) : null,
+        availableAt: failure.code === "CIRCUIT_OPEN" && providerCircuit.openUntil > Date.now()
+          ? new Date(providerCircuit.openUntil).toISOString()
+          : null,
+      },
+    }, responseStatus);
   }
 });
 
