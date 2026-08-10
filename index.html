@@ -1644,6 +1644,25 @@
 </section>
     </main>
 
+    <div class="modal-overlay" id="auth-modal" onclick="handleAuthOutsideClick(event)">
+        <form class="modal-box" onsubmit="submitAuthForm(event)">
+            <div class="modal-title" id="auth-modal-title">登录 Reading Cosmos</div>
+            <div class="form-group">
+                <label for="auth-email">邮箱</label>
+                <input type="email" id="auth-email" class="form-input" autocomplete="email" required placeholder="name@example.com">
+            </div>
+            <div class="form-group">
+                <label for="auth-password">密码</label>
+                <input type="password" id="auth-password" class="form-input" autocomplete="current-password" minlength="6" required placeholder="至少 6 位">
+            </div>
+            <div class="settings-status" id="auth-status" role="status" aria-live="polite"></div>
+            <div class="modal-buttons">
+                <button type="button" class="btn-secondary" onclick="closeAuthModal()" style="background:#f1f5f9; border:none; padding:10px 16px; border-radius:8px; cursor:pointer;">取消</button>
+                <button type="submit" class="btn-primary" id="auth-submit-btn">登录</button>
+            </div>
+        </form>
+    </div>
+
     <div class="modal-overlay" id="add-book-modal">
         <div class="modal-box">
             <div class="modal-title">探索新思想星球 🪐</div>
@@ -1678,16 +1697,17 @@
             <div class="modal-title">设置中心</div>
             <div class="settings-grid">
                 <div class="form-group form-group-full"><label for="settings-display-name">昵称</label><input type="text" id="settings-display-name" class="form-input" maxlength="40" placeholder="旅行者"></div>
+                <div class="form-group form-group-full"><label for="settings-overview-mode">书籍概要生成方式</label><select id="settings-overview-mode" class="form-input"><option value="managed">平台托管（推荐，缓存并跨设备同步）</option><option value="byok">本地 BYOK（使用下方个人 API Key）</option></select></div>
                 <div class="form-group"><label for="settings-provider">AI Provider</label><select id="settings-provider" class="form-input" onchange="updateAIProviderFields()"><option value="glm">智谱 GLM</option><option value="openai_compatible">OpenAI Compatible</option></select></div>
                 <div class="form-group"><label for="settings-model">模型</label><input type="text" id="settings-model" class="form-input" placeholder="glm-4.7-flash"></div>
                 <div class="form-group form-group-full"><label for="settings-base-url">Chat Completions 地址</label><input type="url" id="settings-base-url" class="form-input" placeholder="https://open.bigmodel.cn/api/paas/v4/chat/completions"></div>
                 <div class="form-group form-group-full"><label for="settings-api-key">API Key</label><input type="password" id="settings-api-key" class="form-input" autocomplete="off" placeholder="仅保存在当前浏览器"></div>
             </div>
-            <div class="settings-security-note">API Key 仅保存在当前浏览器，不上传 Supabase、不参与电脑与手机云同步。公共或共享设备请勿保存密钥。</div>
+            <div class="settings-security-note">平台托管仅用于书籍概要；笔记辅助等功能仍使用本地 BYOK。个人 API Key 仅保存在当前浏览器，不上传 Supabase、不参与电脑与手机云同步。</div>
             <div class="settings-status" id="settings-status" role="status"></div>
             <div class="modal-buttons">
                 <button class="btn-secondary" onclick="closeSettings()" style="background:#f1f5f9; border:none; padding:10px 16px; border-radius:8px; cursor:pointer;">取消</button>
-                <button class="btn-secondary" id="settings-test-btn" onclick="testAIConnection()" style="background:#e0f2fe; color:#0369a1; border:none; padding:10px 16px; border-radius:8px; cursor:pointer;">测试连接</button>
+                <button class="btn-secondary" id="settings-test-btn" onclick="testAIConnection()" style="background:#e0f2fe; color:#0369a1; border:none; padding:10px 16px; border-radius:8px; cursor:pointer;">测试本地 BYOK</button>
                 <button class="btn-primary" id="settings-save-btn" onclick="saveSettings()">保存设置</button>
             </div>
         </div>
@@ -1842,37 +1862,39 @@ console.log('Supabase Client Ready');
 // 注册
 // =============================
 
+let authModalMode = 'login';
+
+function setAuthStatus(message, isError = false) {
+    const node = document.getElementById('auth-status');
+    node.textContent = message || '';
+    node.style.color = isError ? '#b91c1c' : '#0369a1';
+}
+
+function openAuthModal(mode) {
+    authModalMode = mode === 'register' ? 'register' : 'login';
+    document.getElementById('auth-modal-title').textContent =
+        authModalMode === 'register' ? '注册 Reading Cosmos' : '登录 Reading Cosmos';
+    document.getElementById('auth-submit-btn').textContent =
+        authModalMode === 'register' ? '创建账号' : '登录';
+    const password = document.getElementById('auth-password');
+    password.autocomplete = authModalMode === 'register' ? 'new-password' : 'current-password';
+    document.getElementById('auth-email').value = '';
+    password.value = '';
+    setAuthStatus('');
+    document.getElementById('auth-modal').classList.add('active');
+    document.getElementById('auth-email').focus();
+}
+
+function closeAuthModal() {
+    document.getElementById('auth-modal').classList.remove('active');
+}
+
+function handleAuthOutsideClick(event) {
+    if (event.target.id === 'auth-modal') closeAuthModal();
+}
+
 async function showRegister() {
-
-    const email = prompt("请输入邮箱");
-
-    if (!email) return;
-
-    const password = prompt("请输入密码（至少6位）");
-
-    if (!password) return;
-
-    const { data, error } =
-    await supabaseClient.auth.signUp({
-        email,
-        password
-    });
-
-    if (error) {
-
-        alert(error.message);
-
-        return;
-    }
-
-    if (data.session && data.user) {
-        await activateAuthenticatedShelf(data.user);
-        alert("注册成功，你的书架现在是空的");
-    } else {
-        showGuestShelf();
-        await checkLoginStatus();
-        alert("注册成功，请完成邮箱验证后登录");
-    }
+    openAuthModal('register');
 }
 
 // =============================
@@ -1880,31 +1902,46 @@ async function showRegister() {
 // =============================
 
 async function showLogin() {
+    openAuthModal('login');
+}
 
-    const email = prompt("请输入邮箱");
-
-    if (!email) return;
-
-    const password = prompt("请输入密码");
-
-    if (!password) return;
-
-    const { data, error } =
-    await supabaseClient.auth.signInWithPassword({
-        email,
-        password
-    });
-
-    if (error) {
-
-        alert(error.message);
-
+async function submitAuthForm(event) {
+    event.preventDefault();
+    const email = document.getElementById('auth-email').value.trim();
+    const password = document.getElementById('auth-password').value;
+    const button = document.getElementById('auth-submit-btn');
+    if (!email || password.length < 6) {
+        setAuthStatus('请输入有效邮箱和至少 6 位密码', true);
         return;
     }
 
-    alert("登录成功");
-
-    await activateAuthenticatedShelf(data.user);
+    button.disabled = true;
+    setAuthStatus(authModalMode === 'register' ? '正在创建账号…' : '正在登录…');
+    try {
+        if (authModalMode === 'register') {
+            const { data, error } = await supabaseClient.auth.signUp({ email, password });
+            if (error) throw error;
+            closeAuthModal();
+            if (data.session && data.user) {
+                await activateAuthenticatedShelf(data.user);
+                showAIStatus('注册成功，你的书架现在是空的', 'success', 5000);
+            } else {
+                showGuestShelf();
+                await checkLoginStatus();
+                showAIStatus('注册成功，请完成邮箱验证后登录', 'success', 6000);
+            }
+        } else {
+            const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+            if (error) throw error;
+            closeAuthModal();
+            await activateAuthenticatedShelf(data.user);
+            showAIStatus('登录成功', 'success');
+        }
+    } catch (error) {
+        setAuthStatus(error.message || '操作失败，请稍后重试', true);
+    } finally {
+        button.disabled = false;
+    }
 }
 // =============================
 // 退出
@@ -1939,6 +1976,7 @@ async function showSettings() {
 
     const local = getLocalAISettings();
     document.getElementById('settings-display-name').value = data?.display_name || '';
+    document.getElementById('settings-overview-mode').value = local.overviewMode;
     document.getElementById('settings-provider').value = local.provider;
     document.getElementById('settings-model').value = local.model || data?.preferred_model || AI_PROVIDER_DEFAULTS.glm.model;
     document.getElementById('settings-base-url').value = local.baseUrl;
@@ -1957,13 +1995,14 @@ function getAISettingsStorageKey() {
 }
 
 function getLocalAISettings() {
-    const defaults = { provider: 'glm', ...AI_PROVIDER_DEFAULTS.glm, apiKey: '' };
+    const defaults = { overviewMode: 'managed', provider: 'glm', ...AI_PROVIDER_DEFAULTS.glm, apiKey: '' };
     const key = getAISettingsStorageKey();
     if (!key) return defaults;
     try {
         const saved = JSON.parse(localStorage.getItem(key) || '{}');
         const provider = AI_PROVIDER_DEFAULTS[saved.provider] ? saved.provider : 'glm';
         return {
+            overviewMode: saved.overviewMode === 'byok' ? 'byok' : 'managed',
             provider,
             model: String(saved.model || AI_PROVIDER_DEFAULTS[provider].model),
             baseUrl: String(saved.baseUrl || AI_PROVIDER_DEFAULTS[provider].baseUrl),
@@ -1977,6 +2016,7 @@ function getLocalAISettings() {
 
 function readAISettingsForm() {
     return {
+        overviewMode: document.getElementById('settings-overview-mode').value === 'byok' ? 'byok' : 'managed',
         provider: document.getElementById('settings-provider').value,
         model: document.getElementById('settings-model').value.trim(),
         baseUrl: document.getElementById('settings-base-url').value.trim(),
@@ -2538,7 +2578,7 @@ async function syncBooksToSupabase() {
 
     for (const book of userBooks) {
 
-        const { error } =
+        const { data, error } =
        await supabaseClient
     .from('books')
     .upsert(
@@ -2575,7 +2615,9 @@ async function syncBooksToSupabase() {
             onConflict:
                 'user_id,source_book_id'
         }
-    );
+    )
+    .select('id, source_book_id')
+    .single();
         if (error) {
 
             console.error(
@@ -2585,6 +2627,8 @@ async function syncBooksToSupabase() {
             );
 
         } else {
+
+            book.cloudId = data.id;
 
             console.log(
                 '已同步',
@@ -2629,6 +2673,9 @@ async function loadBooksFromSupabase(user = currentUser) {
     }
 
     booksData = data.map(book => ({
+
+        cloudId:
+            book.id,
 
         id:
             book.source_book_id,
@@ -3220,31 +3267,83 @@ function getCategoryStyle(cat) {
             await generateAutomaticBookSummary(newBook);
         }
 
-        async function generateAutomaticBookSummary(book) {
+        async function callManagedBookOverview(book, forceRefresh = false) {
+            if (!book.cloudId) await syncBooksToSupabase();
+            if (!book.cloudId) {
+                throw new AIProviderError('书籍尚未完成云同步，请检查网络后重试', { code: 'NETWORK' });
+            }
+
+            const { data, error } = await supabaseClient.functions.invoke('ai-gateway', {
+                body: {
+                    taskType: 'book_overview',
+                    bookId: book.cloudId,
+                    forceRefresh
+                }
+            });
+            if (error || data?.error) {
+                let detail = data?.error || null;
+                if (!detail && error?.context instanceof Response) {
+                    detail = await error.context.clone().json().then(payload => payload?.error).catch(() => null);
+                }
+                const code = detail?.code || 'UNAVAILABLE';
+                const message = detail?.message || '平台 AI 服务暂时不可用，请稍后重试';
+                throw new AIProviderError(message, {
+                    code,
+                    status: Number(error?.context?.status || 0),
+                    retryable: ['RATE_LIMIT', 'TIMEOUT', 'NETWORK', 'UNAVAILABLE'].includes(code)
+                });
+            }
+            if (!data?.artifact?.content) {
+                throw new AIProviderError('', { code: 'INVALID_RESPONSE' });
+            }
+            return {
+                content: data.artifact.content,
+                sources: Array.isArray(data.artifact.sources) ? data.artifact.sources : [],
+                settings: {
+                    provider: data.artifact.provider || 'managed_gateway',
+                    model: data.artifact.model || ''
+                },
+                taskType: 'book_overview',
+                requestId: data.requestId,
+                attempts: Number(data.attempts || 0),
+                cacheHit: Boolean(data.cacheHit),
+                promptVersion: data.artifact.promptVersion || '',
+                generatedAt: data.artifact.generatedAt || new Date().toISOString()
+            };
+        }
+
+        async function generateAutomaticBookSummary(book, { forceRefresh = false } = {}) {
             const settings = getLocalAISettings();
-            if (!settings.apiKey) return false;
+            if (settings.overviewMode === 'byok' && !settings.apiKey) {
+                showAIStatus('请先在设置中心配置个人 API Key，或切换为平台托管概要', 'warning', 5000);
+                return false;
+            }
 
             const summaryText = document.getElementById('mod-summary-text');
             const mask = summaryText.closest('.detail-module').querySelector('.ai-loading-mask');
             summaryText.innerText = 'AI 正在生成内容概要…';
             mask.classList.add('active');
             try {
-                const result = await callAIProvider(
-                    buildBookOverviewMessages(book),
-                    settings,
-                    { taskType: 'book_overview', webSearch: true }
-                );
+                const result = settings.overviewMode === 'managed'
+                    ? await callManagedBookOverview(book, forceRefresh)
+                    : await callAIProvider(
+                        buildBookOverviewMessages(book),
+                        settings,
+                        { taskType: 'book_overview', webSearch: true }
+                    );
                 book.aiData = book.aiData || {};
                 book.aiData.overview = {
                     content: result.content,
                     operation: 'auto_summary',
                     notesRevision: Number(book.notesRevision || 0),
-                    generatedAt: new Date().toISOString(),
+                    generatedAt: result.generatedAt || new Date().toISOString(),
                     provider: result.settings.provider,
                     model: result.settings.model,
                     requestId: result.requestId,
                     attempts: result.attempts,
-                    sources: result.sources
+                    sources: result.sources,
+                    cacheHit: Boolean(result.cacheHit),
+                    promptVersion: result.promptVersion || ''
                 };
                 summaryText.innerText = getBookSummaryText(book) || '暂无概要';
                 await saveToLocalStorage();
@@ -3264,7 +3363,7 @@ function getCategoryStyle(cat) {
             const book = booksData.find(item => item.id === activeBookId);
             if (!book) return;
             if (!confirm('重新联网检索并生成内容概要？当前 AI 概要将被替换，可能产生模型与搜索费用。')) return;
-            await generateAutomaticBookSummary(book);
+            await generateAutomaticBookSummary(book, { forceRefresh: true });
         }
 
         function buildBookOverviewMessages(book) {

@@ -4,6 +4,17 @@
 
 Reading Cosmos Pro MAX 是一个 AI 驱动的阅读管理系统。
 
+## AI Gateway（v4.4 Batch 2）
+
+书籍内容概要默认通过已登录用户专用的 Supabase Edge Function 生成。Gateway 会验证书籍所有权、复用相同书籍元数据和 Prompt 版本的缓存，并将每日新生成限制为每名用户 10 次；缓存命中不占额度。笔记辅助等功能仍使用浏览器本地 BYOK，两种模式不会自动互相切换。
+
+部署前须在 Supabase Dashboard 的 Edge Function Secrets 中配置：
+
+- `GLM_API_KEY`：平台智谱 API Key，禁止提交到 Git。
+- `GLM_MODEL`：可选，默认 `glm-4.7-flash`。
+
+迁移与部署顺序：先执行 `supabase/migrations`，再部署 `ai-gateway`，确认 Secret 后才发布包含 Gateway 默认模式的前端。回滚时先恢复旧前端或切换到本地 BYOK，再下线 Gateway；`books.ai_data.overview` 兼容镜像保证已生成概要仍可显示。
+
 它诞生于一个非常简单的问题：
 
 > 当阅读发生在手机、电子阅读器、纸质书、图书馆等不同渠道时，我们如何能够轻松记录所有阅读，并真正把知识沉淀下来，而不是停留在「读过」？
