@@ -1,11 +1,12 @@
 import "jsr:@supabase/functions-js@2.5.0/edge-runtime.d.ts";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-const TASK_TYPES = ["book_overview", "note_assistance"] as const;
+const TASK_TYPES = ["book_overview", "note_assistance", "reading_insight"] as const;
 type TaskType = typeof TASK_TYPES[number];
 const PROMPT_VERSIONS: Record<TaskType, string> = {
   book_overview: "book-overview-v1",
   note_assistance: "note-assistance-v1",
+  reading_insight: "reading-insight-v1",
 };
 const PROVIDER = "zhipu";
 const DEFAULT_MODEL = "glm-4.7-flash";
@@ -13,6 +14,7 @@ const GLM_ENDPOINT = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
 const DAILY_GENERATION_LIMIT: Record<TaskType, number> = {
   book_overview: 10,
   note_assistance: 20,
+  reading_insight: 3,
 };
 const REQUEST_TIMEOUT_MS = 55_000;
 const PROVIDER_ROUTES = [{ provider: PROVIDER, modelEnv: "GLM_MODEL", defaultModel: DEFAULT_MODEL }] as const;
@@ -33,6 +35,8 @@ type GatewayBody = {
   forceRefresh?: boolean;
   field?: string;
   operation?: string;
+  year?: number;
+  cacheOnly?: boolean;
 };
 
 type UsageStatus = { limit: number; used: number; remaining: number };
@@ -198,11 +202,80 @@ function buildNoteAssistanceMessages(
   ];
 }
 
+function buildReadingInsightMessages(
+  books: Array<{
+    title: string;
+    author: string | null;
+    category: string | null;
+    rating: number | null;
+    timestamp: number | null;
+    note_method: string | null;
+    summary: string | null;
+    concepts: string | null;
+    thoughts: string | null;
+    actions: string | null;
+  }>,
+  year: number,
+) {
+  const readingContext = books.map((book) => ({
+    title: book.title,
+    author: book.author,
+    category: book.category,
+    rating: book.rating,
+    addedAt: book.timestamp ? new Date(book.timestamp).toISOString().slice(0, 10) : null,
+    noteMethod: book.note_method,
+    notes: {
+      summary: book.summary,
+      concepts: book.concepts,
+      thoughts: book.thoughts,
+      actions: book.actions,
+    },
+  }));
+  return [
+    {
+      role: "system",
+      content: "你是 Reading Cosmos 的阅读数据分析助手。用户笔记是最高优先级证据。只根据提供的书籍与笔记识别阅读特征，不虚构阅读经历、书中内容或用户观点。推荐路线要解释与现有阅读结构的关系。只输出合法 JSON，不要使用 Markdown。",
+    },
+    {
+      role: "user",
+      content: `请分析 ${year} 年及当前累计阅读宇宙。输出 JSON：{"personaTitle":"不超过18字","personaDescription":"80-140字","cognitiveFocus":"80-140字","readingRoute":[{"title":"书名","reason":"50-100字"}],"annualReport":"160-260字"}。readingRoute 给出 2-3 本延伸书籍；若证据不足应明确使用“初步”措辞。\n\n阅读数据：\n${JSON.stringify(readingContext)}`,
+    },
+  ];
+}
+
+function parseReadingInsight(content: string): Record<string, unknown> {
+  const cleaned = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(cleaned) as Record<string, unknown>;
+  } catch {
+    throw providerFailure("INVALID_RESPONSE", 0, true);
+  }
+  const route = Array.isArray(parsed.readingRoute) ? parsed.readingRoute.slice(0, 3) : [];
+  const normalizedRoute = route.map((item) => {
+    const entry = item as Record<string, unknown>;
+    return { title: String(entry.title ?? "").trim(), reason: String(entry.reason ?? "").trim() };
+  }).filter((item) => item.title && item.reason);
+  const result = {
+    personaTitle: String(parsed.personaTitle ?? "").trim(),
+    personaDescription: String(parsed.personaDescription ?? "").trim(),
+    cognitiveFocus: String(parsed.cognitiveFocus ?? "").trim(),
+    readingRoute: normalizedRoute,
+    annualReport: String(parsed.annualReport ?? "").trim(),
+  };
+  if (!result.personaTitle || !result.personaDescription || !result.cognitiveFocus ||
+    !result.annualReport || result.readingRoute.length < 2) {
+    throw providerFailure("INVALID_RESPONSE", 0, true);
+  }
+  return result;
+}
+
 async function executeProviderWithReliability(
   key: string,
   apiKey: string,
   model: string,
   messages: Array<{ role: string; content: string }>,
+  webSearch = false,
 ): Promise<ProviderResult> {
   if (providerCircuit.openUntil > Date.now()) throw providerFailure("CIRCUIT_OPEN");
   const existing = inFlightRequests.get(key);
@@ -212,7 +285,7 @@ async function executeProviderWithReliability(
     let finalFailure: ProviderFailure | null = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        const result = await callGlm(apiKey, model, messages);
+        const result = await callGlm(apiKey, model, messages, webSearch);
         providerCircuit.failures = 0;
         providerCircuit.openUntil = 0;
         return { ...result, attempts: attempt + 1 };
@@ -239,7 +312,12 @@ async function executeProviderWithReliability(
   }
 }
 
-async function callGlm(apiKey: string, model: string, messages: Array<{ role: string; content: string }>) {
+async function callGlm(
+  apiKey: string,
+  model: string,
+  messages: Array<{ role: string; content: string }>,
+  webSearch = false,
+) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
@@ -251,18 +329,22 @@ async function callGlm(apiKey: string, model: string, messages: Array<{ role: st
         messages,
         temperature: 0.35,
         stream: false,
-        tools: [{
-          type: "web_search",
-          web_search: {
-            enable: true,
-            search_engine: "search_std",
-            search_result: true,
-            count: 8,
-            search_recency_filter: "noLimit",
-            content_size: "high",
-          },
-        }],
-        tool_choice: "auto",
+        ...(webSearch
+          ? {
+            tools: [{
+              type: "web_search",
+              web_search: {
+                enable: true,
+                search_engine: "search_std",
+                search_result: true,
+                count: 8,
+                search_recency_filter: "noLimit",
+                content_size: "high",
+              },
+            }],
+            tool_choice: "auto",
+          }
+          : {}),
       }),
       signal: controller.signal,
     });
@@ -274,8 +356,8 @@ async function callGlm(apiKey: string, model: string, messages: Array<{ role: st
     if (typeof content !== "string" || !content.trim()) {
       throw providerFailure("INVALID_RESPONSE", response.status, true);
     }
-    const webSearch = Array.isArray(payload.web_search) ? payload.web_search : [];
-    const sources = webSearch.slice(0, 12).map((item) => {
+    const webSearchResults = Array.isArray(payload.web_search) ? payload.web_search : [];
+    const sources = webSearchResults.slice(0, 12).map((item) => {
       const source = item as Record<string, unknown>;
       return {
         title: String(source.title ?? ""),
@@ -337,10 +419,11 @@ Deno.serve(async (req: Request) => {
     const dayStart = new Date();
     dayStart.setUTCHours(0, 0, 0, 0);
     try {
-      const [bookOverview, noteAssistance, settingsResult] = await Promise.all([
+      const [bookOverview, noteAssistance, readingInsight, settingsResult] = await Promise.all([
         getDailyUsage(adminClient, userData.user.id, "book_overview", dayStart.toISOString()),
         getDailyUsage(adminClient, userData.user.id, "note_assistance", dayStart.toISOString()),
-        userClient.from("user_settings").select("ai_note_consent_at").eq("user_id", userData.user.id).maybeSingle(),
+        getDailyUsage(adminClient, userData.user.id, "reading_insight", dayStart.toISOString()),
+        userClient.from("user_settings").select("ai_note_consent_at, ai_insight_consent_at").eq("user_id", userData.user.id).maybeSingle(),
       ]);
       if (settingsResult.error) throw settingsResult.error;
       const circuitOpen = providerCircuit.openUntil > Date.now();
@@ -353,17 +436,23 @@ Deno.serve(async (req: Request) => {
           fallbackEnabled: PROVIDER_ROUTES.length > 1,
           availableAt: circuitOpen ? new Date(providerCircuit.openUntil).toISOString() : null,
         },
-        quota: { bookOverview, noteAssistance, resetsAt: nextUtcDayStart() },
-        consent: { noteAssistance: Boolean(settingsResult.data?.ai_note_consent_at) },
+        quota: { bookOverview, noteAssistance, readingInsight, resetsAt: nextUtcDayStart() },
+        consent: {
+          noteAssistance: Boolean(settingsResult.data?.ai_note_consent_at),
+          readingInsight: Boolean(settingsResult.data?.ai_insight_consent_at),
+        },
       });
     } catch {
       return jsonResponse({ requestId, error: { code: "DATABASE", message: "暂时无法读取平台 AI 状态" } }, 500);
     }
   }
-  if (!TASK_TYPES.includes(body.taskType as TaskType) || !body.bookId) {
+  if (!TASK_TYPES.includes(body.taskType as TaskType)) {
     return jsonResponse({ requestId, error: { code: "INVALID_REQUEST", message: "不支持的 AI 任务" } }, 400);
   }
   const taskType = body.taskType as TaskType;
+  if (taskType !== "reading_insight" && !body.bookId) {
+    return jsonResponse({ requestId, error: { code: "INVALID_REQUEST", message: "缺少书籍标识" } }, 400);
+  }
   const promptVersion = PROMPT_VERSIONS[taskType];
   if (taskType === "note_assistance" &&
     (!NOTE_FIELDS.includes(body.field as typeof NOTE_FIELDS[number]) ||
@@ -371,38 +460,86 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ requestId, error: { code: "INVALID_REQUEST", message: "笔记辅助参数无效" } }, 400);
   }
 
-  const { data: book, error: bookError } = await userClient
-    .from("books")
-    .select("id, user_id, title, author, category, rating, note_method, notes_revision, summary, concepts, thoughts, actions")
-    .eq("id", body.bookId)
-    .maybeSingle();
-  if (bookError) return jsonResponse({ requestId, error: { code: "DATABASE", message: "暂时无法读取书籍" } }, 500);
-  if (!book) return jsonResponse({ requestId, error: { code: "NOT_FOUND", message: "未找到这本书" } }, 404);
-
-  if (taskType === "note_assistance") {
+  if (taskType === "note_assistance" || taskType === "reading_insight") {
     const { data: settings, error: settingsError } = await userClient
       .from("user_settings")
-      .select("ai_note_consent_at")
+      .select("ai_note_consent_at, ai_insight_consent_at")
       .eq("user_id", userData.user.id)
       .maybeSingle();
     if (settingsError) return jsonResponse({ requestId, error: { code: "DATABASE", message: "暂时无法确认 AI 授权状态" } }, 500);
-    if (!settings?.ai_note_consent_at) {
-      return jsonResponse({ requestId, error: { code: "CONSENT_REQUIRED", message: "请先确认笔记 AI 数据处理说明" } }, 403);
+    const consented = taskType === "note_assistance"
+      ? Boolean(settings?.ai_note_consent_at)
+      : Boolean(settings?.ai_insight_consent_at);
+    if (!consented) {
+      return jsonResponse({
+        requestId,
+        error: {
+          code: "CONSENT_REQUIRED",
+          message: taskType === "note_assistance" ? "请先确认笔记 AI 数据处理说明" : "请先确认阅读洞察 AI 数据处理说明",
+        },
+      }, 403);
     }
   }
 
-  const scopeKey = `book:${book.id}`;
-  const sourceRevision = 0;
-  const inputHash = await sha256([
-    taskType,
-    normalizeMetadata(book.title),
-    normalizeMetadata(book.author),
-    normalizeMetadata(book.category),
-    String(sourceRevision),
-    promptVersion,
-  ].join("|"));
+  let book: Record<string, any> | null = null;
+  let insightBooks: Array<Record<string, any>> = [];
+  if (taskType === "reading_insight") {
+    const { data, error } = await userClient
+      .from("books")
+      .select("id, title, author, category, rating, timestamp, note_method, notes_revision, summary, concepts, thoughts, actions, updated_at")
+      .order("id", { ascending: true });
+    if (error) return jsonResponse({ requestId, error: { code: "DATABASE", message: "暂时无法读取阅读数据" } }, 500);
+    insightBooks = data ?? [];
+    if (insightBooks.length === 0) {
+      return jsonResponse({ requestId, error: { code: "INSUFFICIENT_DATA", message: "至少添加一本书后才能生成阅读洞察" } }, 400);
+    }
+  } else {
+    const { data, error } = await userClient
+      .from("books")
+      .select("id, user_id, title, author, category, rating, note_method, notes_revision, summary, concepts, thoughts, actions")
+      .eq("id", body.bookId)
+      .maybeSingle();
+    if (error) return jsonResponse({ requestId, error: { code: "DATABASE", message: "暂时无法读取书籍" } }, 500);
+    if (!data) return jsonResponse({ requestId, error: { code: "NOT_FOUND", message: "未找到这本书" } }, 404);
+    book = data;
+  }
 
-  if (taskType === "book_overview" && !body.forceRefresh) {
+  const insightYear = Number.isInteger(body.year) && Number(body.year) >= 2000 && Number(body.year) <= 2100
+    ? Number(body.year)
+    : new Date().getUTCFullYear();
+  const sourceRevision = taskType === "reading_insight"
+    ? insightBooks.reduce((sum, item) => sum + Number(item.notes_revision || 0), insightBooks.length)
+    : 0;
+  const scopeKey = taskType === "reading_insight" ? `reading:annual:${insightYear}` : `book:${book!.id}`;
+  const inputHash = taskType === "reading_insight"
+    ? await sha256(JSON.stringify({
+      taskType,
+      year: insightYear,
+      promptVersion,
+      books: insightBooks.map((item) => ({
+        id: item.id,
+        title: normalizeMetadata(item.title),
+        author: normalizeMetadata(item.author),
+        category: normalizeMetadata(item.category),
+        rating: Number(item.rating || 0),
+        timestamp: Number(item.timestamp || 0),
+        notesRevision: Number(item.notes_revision || 0),
+        summary: normalizeMetadata(item.summary),
+        concepts: normalizeMetadata(item.concepts),
+        thoughts: normalizeMetadata(item.thoughts),
+        actions: normalizeMetadata(item.actions),
+      })),
+    }))
+    : await sha256([
+      taskType,
+      normalizeMetadata(book!.title),
+      normalizeMetadata(book!.author),
+      normalizeMetadata(book!.category),
+      String(sourceRevision),
+      promptVersion,
+    ].join("|"));
+
+  if ((taskType === "book_overview" || taskType === "reading_insight") && !body.forceRefresh) {
     const { data: cached } = await userClient
       .from("ai_artifacts")
       .select("id, content, sources, provider, model, generated_at, prompt_version")
@@ -418,7 +555,7 @@ Deno.serve(async (req: Request) => {
         attempts: 0,
         artifact: {
           id: cached.id,
-          content: cached.content?.text ?? "",
+          content: taskType === "reading_insight" ? cached.content : cached.content?.text ?? "",
           sources: cached.sources ?? [],
           provider: cached.provider,
           model: cached.model,
@@ -426,6 +563,9 @@ Deno.serve(async (req: Request) => {
           promptVersion: cached.prompt_version,
         },
       });
+    }
+    if (taskType === "reading_insight" && body.cacheOnly) {
+      return jsonResponse({ requestId, cacheHit: false, cacheMiss: true });
     }
   }
 
@@ -444,7 +584,7 @@ Deno.serve(async (req: Request) => {
       requestId,
       error: {
         code: "DAILY_LIMIT",
-        message: `今日${taskType === "book_overview" ? "概要生成" : "笔记辅助"}已达到 ${dailyLimit} 次`,
+        message: `今日${taskType === "book_overview" ? "概要生成" : taskType === "note_assistance" ? "笔记辅助" : "阅读洞察重新分析"}已达到 ${dailyLimit} 次`,
         limit: dailyLimit,
         remaining: 0,
         availableAt: nextUtcDayStart(),
@@ -456,36 +596,45 @@ Deno.serve(async (req: Request) => {
   }
 
   const messages = taskType === "book_overview"
-    ? buildOverviewMessages(book)
-    : buildNoteAssistanceMessages(book, body.field!, body.operation!);
+    ? buildOverviewMessages(book! as any)
+    : taskType === "note_assistance"
+    ? buildNoteAssistanceMessages(book! as any, body.field!, body.operation!)
+    : buildReadingInsightMessages(insightBooks as any, insightYear);
   const dedupeKey = [
     userData.user.id,
     taskType,
-    book.id,
+    book?.id || scopeKey,
     body.field || "",
     body.operation || "",
-    String(book.notes_revision || 0),
+    String(book?.notes_revision || sourceRevision),
     inputHash,
   ].join("|");
   try {
     const route = PROVIDER_ROUTES[0];
     const routedModel = Deno.env.get(route.modelEnv) || route.defaultModel;
-    const result = await executeProviderWithReliability(dedupeKey, glmApiKey, routedModel, messages);
+    const result = await executeProviderWithReliability(
+      dedupeKey,
+      glmApiKey,
+      routedModel,
+      messages,
+      taskType === "book_overview",
+    );
     const generatedAt = new Date().toISOString();
+    const insightContent = taskType === "reading_insight" ? parseReadingInsight(result.content) : null;
     let artifactId: string | null = null;
-    if (taskType === "book_overview") {
+    if (taskType === "book_overview" || taskType === "reading_insight") {
       const { data: artifact, error: artifactError } = await adminClient
         .from("ai_artifacts")
         .upsert({
           user_id: userData.user.id,
-          book_id: book.id,
+          book_id: book?.id || null,
           task_type: taskType,
           scope_key: scopeKey,
           input_hash: inputHash,
           source_revision: sourceRevision,
           prompt_version: promptVersion,
-          content: { text: result.content },
-          sources: result.sources,
+          content: taskType === "reading_insight" ? insightContent : { text: result.content },
+          sources: taskType === "reading_insight" ? [] : result.sources,
           provider: PROVIDER,
           model: routedModel,
           generated_at: generatedAt,
@@ -500,7 +649,7 @@ Deno.serve(async (req: Request) => {
     await adminClient.from("ai_generations").insert({
         request_id: requestId,
         user_id: userData.user.id,
-        book_id: book.id,
+        book_id: book?.id || null,
         task_type: taskType,
         provider: PROVIDER,
         model: routedModel,
@@ -519,6 +668,23 @@ Deno.serve(async (req: Request) => {
         attempts: result.attempts,
         remaining: Math.max(0, dailyLimit - dailyCount - 1),
         suggestion: { content: result.content, provider: PROVIDER, model: routedModel, generatedAt, promptVersion },
+      });
+    }
+    if (taskType === "reading_insight") {
+      return jsonResponse({
+        requestId,
+        cacheHit: false,
+        attempts: result.attempts,
+        remaining: Math.max(0, dailyLimit - dailyCount - 1),
+        artifact: {
+          id: artifactId,
+          content: insightContent,
+          sources: [],
+          provider: PROVIDER,
+          model: routedModel,
+          generatedAt,
+          promptVersion,
+        },
       });
     }
     return jsonResponse({
@@ -541,7 +707,7 @@ Deno.serve(async (req: Request) => {
     await adminClient.from("ai_generations").insert({
       request_id: requestId,
       user_id: userData.user.id,
-      book_id: book.id,
+      book_id: book?.id || null,
       task_type: taskType,
       provider: PROVIDER,
       model,

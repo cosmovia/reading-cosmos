@@ -1721,7 +1721,7 @@
                 <div class="form-group form-group-full"><label for="settings-base-url">Chat Completions 地址</label><input type="url" id="settings-base-url" class="form-input" placeholder="https://open.bigmodel.cn/api/paas/v4/chat/completions"></div>
                 <div class="form-group form-group-full"><label for="settings-api-key">API Key</label><input type="password" id="settings-api-key" class="form-input" autocomplete="off" placeholder="仅保存在当前浏览器"></div>
             </div>
-            <div class="settings-security-note">平台 Gateway 用于书籍概要与笔记思考建议；笔记建议正文只在当前编辑会话显示。个人 BYOK 目前仅用于可选的概要生成和数据洞察，API Key 只保存在当前浏览器，不上传 Supabase。当前平台只启用 GLM，尚未启用跨服务商自动切换。</div>
+            <div class="settings-security-note">平台 Gateway 用于书籍概要、笔记思考建议和阅读洞察；笔记建议正文只在当前编辑会话显示，阅读洞察经单独确认后跨设备保存。个人 BYOK 目前仅用于可选的概要生成，API Key 只保存在当前浏览器，不上传 Supabase。当前平台只启用 GLM，尚未启用跨服务商自动切换。</div>
             <div class="settings-status" id="settings-status" role="status"></div>
             <div class="modal-buttons">
                 <button class="btn-secondary" onclick="closeSettings()" style="background:#f1f5f9; border:none; padding:10px 16px; border-radius:8px; cursor:pointer;">取消</button>
@@ -2131,9 +2131,11 @@ async function loadManagedAIStatus() {
         metaNode.textContent = `当前模型：${gateway.activeModel || '未公布'} · ${routeText}${availableText}`;
         const overview = data?.quota?.bookOverview || {};
         const notes = data?.quota?.noteAssistance || {};
+        const insight = data?.quota?.readingInsight || {};
         quotaNode.innerHTML = `
             <div class="ai-quota-item">内容概要：今日剩余 <strong>${Number(overview.remaining || 0)}</strong> / ${Number(overview.limit || 0)} 次</div>
-            <div class="ai-quota-item">笔记辅助：今日剩余 <strong>${Number(notes.remaining || 0)}</strong> / ${Number(notes.limit || 0)} 次</div>`;
+            <div class="ai-quota-item">笔记辅助：今日剩余 <strong>${Number(notes.remaining || 0)}</strong> / ${Number(notes.limit || 0)} 次</div>
+            <div class="ai-quota-item">阅读洞察：今日剩余 <strong>${Number(insight.remaining || 0)}</strong> / ${Number(insight.limit || 0)} 次</div>`;
         const resetText = formatAIAvailability(data?.quota?.resetsAt);
         if (resetText) metaNode.textContent += ` · ${resetText} 刷新额度`;
     } catch (detail) {
@@ -2881,6 +2883,7 @@ async function loadBooksFromSupabase(user = currentUser) {
         let currentView = 'shelf';
         let activeBookId = null;
         const transientNoteAISuggestions = new Map();
+        let managedReadingInsight = null;
         let isEditing = false;
         let pendingNoteSaveTimer = null;
         let pendingNoteBookId = null;
@@ -3013,6 +3016,7 @@ async function loadBooksFromSupabase(user = currentUser) {
         function showGuestShelf() {
             currentUser = null;
             activeBookId = null;
+            managedReadingInsight = null;
             isEditing = false;
             booksData = createDemoBooks();
             refreshApplicationData();
@@ -3021,6 +3025,7 @@ async function loadBooksFromSupabase(user = currentUser) {
         async function activateAuthenticatedShelf(user) {
             currentUser = user || null;
             activeBookId = null;
+            managedReadingInsight = null;
             isEditing = false;
 
             if (!currentUser) {
@@ -3140,6 +3145,7 @@ function getCategoryStyle(cat) {
         async function saveToLocalStorage() {
 
     if (!currentUser) return false;
+    managedReadingInsight = null;
 
     localStorage.setItem(
         `reading_cosmos_data_store:${currentUser.id}`,
@@ -3246,6 +3252,7 @@ function getCategoryStyle(cat) {
     else if(viewName === 'insights'){
 
         renderDataInsights();
+        loadManagedReadingInsight({ cacheOnly: true });
 
     }
 
@@ -3809,54 +3816,100 @@ function getCategoryStyle(cat) {
 
 async function reAnalyzeUniverse() {
     if (!requireAuthenticatedUser()) return;
-    renderDataInsights();
-
-    const settings = getLocalAISettings();
-    if (!settings.apiKey) {
-        alert('请先在设置中心配置 AI Provider 与 API Key');
-        await showSettings();
+    if (booksData.length === 0) {
+        alert('至少添加一本书后才能生成阅读洞察');
         return;
     }
+    await loadManagedReadingInsight({ forceRefresh: true, notify: true });
+}
 
+function applyManagedReadingInsight(content) {
+    if (!content || typeof content !== 'object') return false;
+    const route = Array.isArray(content.readingRoute) ? content.readingRoute : [];
+    if (!content.personaTitle || !content.personaDescription || !content.cognitiveFocus ||
+        !content.annualReport || route.length === 0) return false;
+    document.getElementById('persona-title').innerText = `🧠 ${content.personaTitle}`;
+    document.getElementById('persona-desc').innerText = content.personaDescription;
+    document.getElementById('insight-cognitive-desc').innerText = content.cognitiveFocus;
+    const routeBox = document.getElementById('route-timeline-box');
+    routeBox.innerHTML = '';
+    route.slice(0, 3).forEach(item => {
+        const step = document.createElement('div');
+        step.className = 'route-step';
+        step.innerHTML = `<div class="route-node"></div><div class="route-book-title"></div><div class="route-reason"></div>`;
+        step.querySelector('.route-book-title').textContent = item.title || '';
+        step.querySelector('.route-reason').textContent = item.reason || '';
+        routeBox.appendChild(step);
+    });
+    document.getElementById('report-ceremony-text').innerText = content.annualReport;
+    return true;
+}
+
+async function loadManagedReadingInsight({ forceRefresh = false, cacheOnly = false, notify = false } = {}) {
+    if (!currentUser || booksData.length === 0) return false;
+    if (!cacheOnly) {
+        try {
+            if (!await ensureReadingInsightConsent()) return false;
+        } catch (error) {
+            alert(error.message || '暂时无法保存阅读洞察 AI 数据处理确认，请稍后重试');
+            return false;
+        }
+    }
     const masks = document.querySelectorAll('#view-insights .ai-loading-mask');
     masks.forEach(mask => mask.classList.add('active'));
     try {
-        const readingContext = booksData.map(book => {
-            const addedAt = new Date(Number(book.timestamp));
-            return {
-                title: book.title,
-                author: book.author,
-                category: book.category,
-                rating: book.rating,
-                addedAt: Number.isNaN(addedAt.getTime())
-                    ? '未知'
-                    : addedAt.toISOString().slice(0, 10),
-                noteMethod: book.noteMethod,
-                notes: {
-                    summary: book.summary,
-                    concepts: book.concepts,
-                    thoughts: book.thoughts,
-                    actions: book.actions
-                }
-            };
-        });
-        const result = await callAIProvider([
-            {
-                role: 'system',
-                content: '你是 Reading Cosmos 的阅读数据分析助手。只根据用户提供的书籍与笔记总结阅读特征，不虚构阅读经历；用户笔记高于 AI 判断。用一段不超过 220 字的中文给出年度阅读洞察。'
-            },
-            {
-                role: 'user',
-                content: `请重新分析我的阅读宇宙：\n${JSON.stringify(readingContext)}`
+        await flushPendingNoteSave();
+        if (!cacheOnly) await syncBooksToSupabase();
+        const { data, error } = await supabaseClient.functions.invoke('ai-gateway', {
+            body: {
+                taskType: 'reading_insight',
+                year: new Date().getFullYear(),
+                forceRefresh,
+                cacheOnly
             }
-        ], settings, { taskType: 'reading_insight' });
-        document.getElementById('report-ceremony-text').innerText = result.content;
-        alert('阅读数据与 AI 洞察已重新分析完成');
+        });
+        if (error || data?.error) {
+            const detail = await getGatewayErrorDetail(error, data);
+            throw new Error(formatGatewayError(detail));
+        }
+        if (data?.cacheMiss) return false;
+        if (!applyManagedReadingInsight(data?.artifact?.content)) {
+            throw new Error('AI 返回的阅读洞察结构无法识别，本次结果未保存');
+        }
+        managedReadingInsight = data.artifact.content;
+        if (notify) {
+            const suffix = data.cacheHit ? '（已复用最新结果）' : `，今日还可重新分析 ${Number(data.remaining || 0)} 次`;
+            alert(`阅读数据与 AI 洞察已更新${suffix}`);
+        }
+        return true;
     } catch (error) {
-        alert(error.message || 'AI 重新分析失败，请稍后重试');
+        if (!cacheOnly || notify) alert(error.message || 'AI 重新分析失败，请稍后重试');
+        return false;
     } finally {
         masks.forEach(mask => mask.classList.remove('active'));
     }
+}
+
+async function ensureReadingInsightConsent() {
+    const { data, error } = await supabaseClient
+        .from('user_settings')
+        .select('ai_insight_consent_at')
+        .eq('user_id', currentUser.id)
+        .maybeSingle();
+    if (error) throw error;
+    if (data?.ai_insight_consent_at) return true;
+    const accepted = confirm(
+        '生成 AI 阅读洞察时，你的书籍列表、评分、分类和已保存笔记将发送给当前平台模型服务商进行整体分析。分析结果会保存在你的账号私有云数据中，用于跨设备查看；不会覆盖或修改任何用户笔记。是否继续？'
+    );
+    if (!accepted) return false;
+    const consentAt = new Date().toISOString();
+    const { error: saveError } = await supabaseClient.from('user_settings').upsert({
+        user_id: currentUser.id,
+        ai_insight_consent_at: consentAt,
+        updated_at: consentAt
+    });
+    if (saveError) throw saveError;
+    return true;
 }
 
         // ================= 互动星球宇宙画布渲染引擎（精细调和暗夜底色） =================
@@ -4358,8 +4411,9 @@ async function reAnalyzeUniverse() {
             });
 
             // 仪式感总结
-            document.getElementById('report-ceremony-text').innerText = 
+            document.getElementById('report-ceremony-text').innerText =
                 `今年，你用纯粹的热爱不断开疆拓土，亲手拓宽着个人的心智认知边界。从最初星火点点，到现在以【${topCat}】为核心的主导星系巍然成型。你在系统里记录下的每一次金句复盘或本质洞察，都是在浮躁的信息巨浪中为自己焊死的一枚理性精神锚点。你的阅读宇宙，正在绽放出属于自己、坚不可摧的终极智慧晶体。`;
+            if (managedReadingInsight) applyManagedReadingInsight(managedReadingInsight);
         }
 
         function bCountByMonth(monthIndex, year) {
