@@ -1,6 +1,9 @@
 import "jsr:@supabase/functions-js@2.5.0/edge-runtime.d.ts";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { ProviderCircuitRegistry, shouldTryNextProvider } from "./provider-routing.ts";
+import {
+  executeTaskProviderRoutes,
+  ProviderCircuitRegistry,
+} from "./provider-routing.ts";
 
 const TASK_TYPES = ["book_overview", "note_assistance", "reading_insight"] as const;
 type TaskType = typeof TASK_TYPES[number];
@@ -23,6 +26,7 @@ type ProviderRoute = {
   apiKeyEnv: string;
   modelEnv: string;
   defaultModel: string;
+  tasks: readonly TaskType[];
   call: typeof callGlm;
 };
 const PROVIDER_ROUTES: ProviderRoute[] = [{
@@ -30,6 +34,7 @@ const PROVIDER_ROUTES: ProviderRoute[] = [{
   apiKeyEnv: "GLM_API_KEY",
   modelEnv: "GLM_MODEL",
   defaultModel: DEFAULT_MODEL,
+  tasks: TASK_TYPES,
   call: callGlm,
 }];
 const NOTE_FIELDS = ["summary", "concepts", "thoughts", "actions"] as const;
@@ -350,38 +355,25 @@ async function executeProviderRoutes(
   messages: Array<{ role: string; content: string }>,
   webSearch = false,
 ): Promise<ProviderResult> {
-  let totalAttempts = 0;
-  let finalFailure: ProviderFailure | null = null;
-  let configuredRoutes = 0;
-  for (const [fallbackIndex, route] of PROVIDER_ROUTES.entries()) {
+  const routes = PROVIDER_ROUTES.map((route) => {
     const apiKey = Deno.env.get(route.apiKeyEnv) ?? "";
-    if (!apiKey) continue;
-    configuredRoutes += 1;
     const model = Deno.env.get(route.modelEnv) || route.defaultModel;
-    try {
-      const result = await executeRouteWithReliability(
+    return {
+      provider: route.provider,
+      model,
+      configured: Boolean(apiKey),
+      tasks: route.tasks,
+      execute: () => executeRouteWithReliability(
         `${key}|${route.provider}|${model}`,
         route,
         apiKey,
         model,
         messages,
         webSearch,
-      );
-      totalAttempts += result.attempts;
-      return { ...result, attempts: totalAttempts, provider: route.provider, model, fallbackIndex };
-    } catch (rawError) {
-      const failure = normalizeProviderFailure(rawError);
-      totalAttempts += failure.attempts ?? 0;
-      failure.provider = route.provider;
-      failure.model = model;
-      failure.fallbackIndex = fallbackIndex;
-      failure.attempts = totalAttempts;
-      finalFailure = failure;
-      if (!shouldTryNextProvider(taskType, failure.code)) break;
-    }
-  }
-  if (configuredRoutes === 0) throw providerFailure("NOT_CONFIGURED");
-  throw finalFailure ?? providerFailure("UNAVAILABLE");
+      ),
+    };
+  });
+  return await executeTaskProviderRoutes(taskType, routes);
 }
 
 async function callGlm(
@@ -450,6 +442,30 @@ async function callGlm(
   }
 }
 
+function buildTaskServiceStatus(
+  taskType: TaskType,
+  configuredRoutes: ProviderRoute[],
+  now = Date.now(),
+) {
+  const taskRoutes = configuredRoutes.filter((route) => route.tasks.includes(taskType));
+  const routeStates = taskRoutes.map((route) => ({
+    route,
+    circuit: getProviderCircuit(route.provider),
+  }));
+  const availableRouteState = routeStates.find(({ circuit }) => circuit.openUntil <= now);
+  const statusRoute = availableRouteState?.route ?? taskRoutes[0] ?? null;
+  const allCircuitsOpen = routeStates.length > 0 && !availableRouteState;
+  return {
+    status: taskRoutes.length === 0 ? "not_configured" : allCircuitsOpen ? "cooling_down" : "available",
+    activeProvider: statusRoute?.provider ?? null,
+    activeModel: statusRoute ? Deno.env.get(statusRoute.modelEnv) || statusRoute.defaultModel : null,
+    fallbackEnabled: taskRoutes.length > 1,
+    availableAt: allCircuitsOpen
+      ? new Date(Math.min(...routeStates.map(({ circuit }) => circuit.openUntil))).toISOString()
+      : null,
+  };
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return jsonResponse({ error: { code: "METHOD_NOT_ALLOWED" } }, 405);
@@ -466,7 +482,6 @@ Deno.serve(async (req: Request) => {
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
   const configuredRoutes = PROVIDER_ROUTES.filter((route) => Boolean(Deno.env.get(route.apiKeyEnv)));
   const activeRoute = configuredRoutes[0] ?? PROVIDER_ROUTES[0];
-  const model = Deno.env.get(activeRoute.modelEnv) || activeRoute.defaultModel;
 
   const userClient = createClient(supabaseUrl, anonKey, {
     global: { headers: { Authorization: authHeader } },
@@ -499,27 +514,21 @@ Deno.serve(async (req: Request) => {
         userClient.from("user_settings").select("ai_note_consent_at, ai_insight_consent_at").eq("user_id", userData.user.id).maybeSingle(),
       ]);
       if (settingsResult.error) throw settingsResult.error;
-      const now = Date.now();
-      const routeStates = configuredRoutes.map((route) => ({
-        route,
-        circuit: getProviderCircuit(route.provider),
-      }));
-      const availableRouteState = routeStates.find(({ circuit }) => circuit.openUntil <= now);
-      const statusRoute = availableRouteState?.route ?? activeRoute;
-      const statusModel = Deno.env.get(statusRoute.modelEnv) || statusRoute.defaultModel;
-      const allCircuitsOpen = routeStates.length > 0 && !availableRouteState;
-      const availableAt = allCircuitsOpen
-        ? new Date(Math.min(...routeStates.map(({ circuit }) => circuit.openUntil))).toISOString()
-        : null;
+      const taskStatus = {
+        bookOverview: buildTaskServiceStatus("book_overview", configuredRoutes),
+        noteAssistance: buildTaskServiceStatus("note_assistance", configuredRoutes),
+        readingInsight: buildTaskServiceStatus("reading_insight", configuredRoutes),
+      };
       return jsonResponse({
         requestId,
         gateway: {
-          status: configuredRoutes.length === 0 ? "not_configured" : allCircuitsOpen ? "cooling_down" : "available",
-          activeProvider: statusRoute.provider,
-          activeModel: statusModel,
-          fallbackEnabled: configuredRoutes.length > 1,
+          status: taskStatus.bookOverview.status,
+          activeProvider: taskStatus.bookOverview.activeProvider,
+          activeModel: taskStatus.bookOverview.activeModel,
+          fallbackEnabled: taskStatus.bookOverview.fallbackEnabled,
           configuredProviders: configuredRoutes.map((route) => route.provider),
-          availableAt,
+          availableAt: taskStatus.bookOverview.availableAt,
+          tasks: taskStatus,
         },
         quota: { bookOverview, noteAssistance, readingInsight, resetsAt: nextUtcDayStart() },
         consent: {
@@ -535,6 +544,9 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ requestId, error: { code: "INVALID_REQUEST", message: "不支持的 AI 任务" } }, 400);
   }
   const taskType = body.taskType as TaskType;
+  const taskPrimaryRoute = configuredRoutes.find((route) => route.tasks.includes(taskType)) ??
+    PROVIDER_ROUTES.find((route) => route.tasks.includes(taskType)) ?? activeRoute;
+  const taskPrimaryModel = Deno.env.get(taskPrimaryRoute.modelEnv) || taskPrimaryRoute.defaultModel;
   if (taskType !== "reading_insight" && !body.bookId) {
     return jsonResponse({ requestId, error: { code: "INVALID_REQUEST", message: "缺少书籍标识" } }, 400);
   }
@@ -786,8 +798,8 @@ Deno.serve(async (req: Request) => {
     });
   } catch (rawError) {
     const failure = normalizeProviderFailure(rawError);
-    const failedProvider = failure.provider || activeRoute.provider;
-    const failedModel = failure.model || model;
+    const failedProvider = failure.provider || taskPrimaryRoute.provider;
+    const failedModel = failure.model || taskPrimaryModel;
     const failedCircuit = getProviderCircuit(failedProvider);
     await adminClient.from("ai_generations").insert({
       request_id: requestId,
