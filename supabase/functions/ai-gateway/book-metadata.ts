@@ -25,6 +25,22 @@ export function buildBookSearchQueries(title: string, author: string): Array<{ t
     : [{ title: normalizedTitle }];
 }
 
+export function buildGoogleBooksSearchParams(
+  query: { title: string; author?: string },
+  apiKey?: string,
+): URLSearchParams {
+  const q = query.author ? `intitle:${query.title} inauthor:${query.author}` : `intitle:${query.title}`;
+  const params = new URLSearchParams({
+    q,
+    maxResults: "10",
+    printType: "books",
+    projection: "lite",
+  });
+  const normalizedApiKey = String(apiKey ?? "").trim();
+  if (normalizedApiKey) params.set("key", normalizedApiKey);
+  return params;
+}
+
 export function safeBookCoverUrl(value: unknown): string {
   try {
     const url = new URL(String(value ?? "").replace(/^http:/i, "https:"));

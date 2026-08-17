@@ -6,6 +6,7 @@ import {
 } from "./provider-routing.ts";
 import {
   buildBookSearchQueries,
+  buildGoogleBooksSearchParams,
   safeBookCoverUrl,
   scoreBookMetadataCandidate,
 } from "./book-metadata.ts";
@@ -236,15 +237,10 @@ async function findOpenLibraryCover(title: string, author: string): Promise<stri
 }
 
 async function findGoogleBooksCover(title: string, author: string): Promise<string> {
+  const apiKey = Deno.env.get("GOOGLE_BOOKS_API_KEY")?.trim();
   for (const query of buildBookSearchQueries(title, author)) {
     const url = new URL("https://www.googleapis.com/books/v1/volumes");
-    const q = query.author ? `intitle:${query.title} inauthor:${query.author}` : `intitle:${query.title}`;
-    url.search = new URLSearchParams({
-      q,
-      maxResults: "10",
-      printType: "books",
-      projection: "lite",
-    }).toString();
+    url.search = buildGoogleBooksSearchParams(query, apiKey).toString();
     const payload = await fetchBookMetadata(url);
     const items = Array.isArray(payload.items) ? payload.items as Array<Record<string, unknown>> : [];
     const candidates = items.map((item) => {

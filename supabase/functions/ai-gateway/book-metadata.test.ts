@@ -1,5 +1,6 @@
 import {
   buildBookSearchQueries,
+  buildGoogleBooksSearchParams,
   normalizeBookMetadata,
   safeBookCoverUrl,
   scoreBookMetadataCandidate,
@@ -31,6 +32,14 @@ Deno.test("book search falls back from author-filtered to title-only lookup", ()
   assert(queries.length === 2, "title-only fallback was not created");
   assert(queries[0].author === "李飞飞", "strict query lost its author");
   assert(!queries[1].author && queries[1].title === "我看见的世界", "fallback query is incorrect");
+});
+
+Deno.test("Google Books search identifies the server project when a key is configured", () => {
+  const params = buildGoogleBooksSearchParams({ title: "我看见的世界", author: "李飞飞" }, " server-key ");
+  assert(params.get("q") === "intitle:我看见的世界 inauthor:李飞飞", "Google query is incorrect");
+  assert(params.get("key") === "server-key", "configured API key was not included");
+  const anonymousParams = buildGoogleBooksSearchParams({ title: "三体" });
+  assert(!anonymousParams.has("key"), "empty API key was included");
 });
 
 Deno.test("exact title and author metadata clears the acceptance threshold", () => {
