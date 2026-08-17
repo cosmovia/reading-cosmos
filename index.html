@@ -803,6 +803,32 @@
             padding-top: 20px;
         }
 
+        .reading-profile-fields {
+            width: 100%;
+            margin-top: 18px;
+            padding-top: 18px;
+            border-top: 1px solid var(--border-color);
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .reading-profile-field { display:flex; flex-direction:column; gap:5px; }
+        .reading-profile-field.full { grid-column:1 / -1; }
+        .reading-profile-field label { color:#64748b; font-size:.72rem; }
+        .reading-profile-control {
+            width:100%;
+            box-sizing:border-box;
+            border:1px solid #dbe3ef;
+            border-radius:9px;
+            padding:8px 9px;
+            background:#fff;
+            color:#334155;
+            font:inherit;
+            font-size:.76rem;
+        }
+        .reading-profile-control:disabled { background:#f1f5f9; color:#64748b; cursor:default; }
+
         .rating-label {
             font-size: 0.8rem;
             color: var(--text-secondary);
@@ -1946,6 +1972,28 @@
                         <span data-value="1">★</span><span data-value="2">★</span><span data-value="3">★</span><span data-value="4">★</span><span data-value="5">★</span>
                     </div>
                 </div>
+                <div class="reading-profile-fields" aria-label="阅读宇宙属性">
+                    <div class="reading-profile-field">
+                        <label for="detail-reading-depth">阅读深度</label>
+                        <select id="detail-reading-depth" class="reading-profile-control" onchange="updateCurrentBookCosmosProfile()">
+                            <option value="standard">普通阅读</option>
+                            <option value="deep">深度阅读</option>
+                            <option value="core">核心阅读</option>
+                        </select>
+                    </div>
+                    <div class="reading-profile-field">
+                        <label for="detail-book-importance">个人重要度</label>
+                        <select id="detail-book-importance" class="reading-profile-control" onchange="updateCurrentBookCosmosProfile()">
+                            <option value="1">一般</option>
+                            <option value="2">重要</option>
+                            <option value="3">认知核心</option>
+                        </select>
+                    </div>
+                    <div class="reading-profile-field full">
+                        <label for="detail-reading-minutes">阅读投入（分钟）</label>
+                        <input id="detail-reading-minutes" class="reading-profile-control" type="number" min="0" max="100000" step="10" inputmode="numeric" onchange="updateCurrentBookCosmosProfile()">
+                    </div>
+                </div>
             </div>
 
             <div class="detail-right" id="detail-right-scroll-zone">
@@ -2372,6 +2420,9 @@ function serializeBookForBackup(book) {
         coverUrl: getSafeBookCoverUrl(book.coverUrl) || (book.coverUrl === ARTWORK_COVER_SENTINEL ? ARTWORK_COVER_SENTINEL : ''),
         noteMethod: normalizeNoteMethod(book.noteMethod, book.category),
         notesRevision: Number(book.notesRevision || 0),
+        readingDepth: normalizeReadingDepth(book.readingDepth),
+        importance: normalizeBookImportance(book.importance),
+        readingMinutes: normalizeReadingMinutes(book.readingMinutes),
         summary: String(getBookSummaryText(book) || ''),
         notes: {
             concepts: String(book.concepts || ''),
@@ -2991,6 +3042,12 @@ async function syncBooksToSupabase() {
                 Number(book.notesRevision || 0),
             ai_data:
                 sanitizeBookAIData(book.aiData),
+            reading_depth:
+                normalizeReadingDepth(book.readingDepth),
+            importance:
+                normalizeBookImportance(book.importance),
+            reading_minutes:
+                normalizeReadingMinutes(book.readingMinutes),
 
             updated_at:
                 new Date().toISOString()
@@ -3104,6 +3161,15 @@ async function loadBooksFromSupabase(user = currentUser) {
         notesRevision:
             Number(book.notes_revision || 0),
 
+        readingDepth:
+            normalizeReadingDepth(book.reading_depth),
+
+        importance:
+            normalizeBookImportance(book.importance),
+
+        readingMinutes:
+            normalizeReadingMinutes(book.reading_minutes),
+
         aiData:
             sanitizeBookAIData(book.ai_data)
 
@@ -3206,6 +3272,20 @@ async function loadBooksFromSupabase(user = currentUser) {
             return category === '小说' ? 'rat' : 'first_principles';
         }
 
+        function normalizeReadingDepth(value) {
+            return ['standard', 'deep', 'core'].includes(value) ? value : 'standard';
+        }
+
+        function normalizeBookImportance(value) {
+            const importance = Number.parseInt(value, 10);
+            return Number.isFinite(importance) ? Math.min(3, Math.max(1, importance)) : 1;
+        }
+
+        function normalizeReadingMinutes(value) {
+            const minutes = Number.parseInt(value, 10);
+            return Number.isFinite(minutes) ? Math.min(100000, Math.max(0, minutes)) : 0;
+        }
+
         function applyNoteMethodUI(book) {
             const method =
                 normalizeNoteMethod(
@@ -3283,6 +3363,9 @@ async function loadBooksFromSupabase(user = currentUser) {
                 noteMethod:
                     normalizeNoteMethod(null, book.category),
                 notesRevision: 0,
+                readingDepth: 'standard',
+                importance: 1,
+                readingMinutes: 0,
                 aiData: {},
                 isDemo: true
             }));
@@ -3849,6 +3932,9 @@ function getCategoryStyle(cat) {
                 id: 'book-' + Date.now(), title: title, author: author, category: category, rating: 5, timestamp: Date.now(),
                 noteMethod: normalizeNoteMethod(noteMethod, category),
                 notesRevision: 0,
+                readingDepth: 'standard',
+                importance: 1,
+                readingMinutes: 0,
                 aiData: {},
                 coverUrl: '',
                 summary: '',
@@ -4006,6 +4092,9 @@ function getCategoryStyle(cat) {
                     book.noteMethod,
                     book.category
                 );
+            book.readingDepth = normalizeReadingDepth(book.readingDepth);
+            book.importance = normalizeBookImportance(book.importance);
+            book.readingMinutes = normalizeReadingMinutes(book.readingMinutes);
 
             applyNoteMethodUI(book);
 
@@ -4023,6 +4112,9 @@ function getCategoryStyle(cat) {
                 document.getElementById('detail-note-method-select');
             noteMethodSelect.value = book.noteMethod;
             noteMethodSelect.disabled = !currentUser;
+            document.getElementById('detail-reading-depth').value = book.readingDepth;
+            document.getElementById('detail-book-importance').value = String(book.importance);
+            document.getElementById('detail-reading-minutes').value = String(book.readingMinutes);
 
             document.getElementById('detail-cover-slot').innerHTML = createBookCover(book);
             document.getElementById('detail-cover-url-input').value = getSafeBookCoverUrl(book.coverUrl);
@@ -4079,6 +4171,7 @@ function getCategoryStyle(cat) {
             const toggleBtn = document.getElementById('detail-master-edit-btn');
             const editElements = document.querySelectorAll('.edit-only-btn');
             const coverEditPanel = document.getElementById('cover-edit-panel');
+            const cosmosProfileControls = document.querySelectorAll('.reading-profile-control');
             const fields = ['concepts', 'thoughts', 'actions'];
             
             const book = booksData.find(b => b.id === activeBookId);
@@ -4095,12 +4188,14 @@ function getCategoryStyle(cat) {
 
                 explanationElements.forEach(el => el.style.display = 'block');
                 coverEditPanel?.classList.add('active');
+                cosmosProfileControls.forEach(control => control.disabled = !currentUser);
             } else {
                 toggleBtn.innerText = '✏️'; 
                 toggleBtn.classList.remove('editing');
                 editElements.forEach(el => el.style.display = 'none');
                 explanationElements.forEach(el => el.style.display = 'none');
                 coverEditPanel?.classList.remove('active');
+                cosmosProfileControls.forEach(control => control.disabled = true);
                 fields.forEach(f => {
                     document.getElementById(`mod-${f}-text`).style.display = 'block';
                     document.getElementById(`mod-${f}-input`).style.display = 'none';
@@ -4207,6 +4302,25 @@ function getCategoryStyle(cat) {
                     );
                 });
             await saveToLocalStorage();
+        }
+
+        async function updateCurrentBookCosmosProfile() {
+            if (!requireAuthenticatedUser() || !activeBookId || !isEditing) return;
+            const book = booksData.find(item => item.id === activeBookId);
+            if (!book) return;
+            book.readingDepth = normalizeReadingDepth(
+                document.getElementById('detail-reading-depth').value
+            );
+            book.importance = normalizeBookImportance(
+                document.getElementById('detail-book-importance').value
+            );
+            book.readingMinutes = normalizeReadingMinutes(
+                document.getElementById('detail-reading-minutes').value
+            );
+            document.getElementById('detail-book-importance').value = String(book.importance);
+            document.getElementById('detail-reading-minutes').value = String(book.readingMinutes);
+            await saveToLocalStorage();
+            rebuildUniversePlanets();
         }
 
         async function triggerModuleAI(field, op) {
@@ -4633,7 +4747,8 @@ async function ensureReadingInsightConsent() {
                     const identityHash = stableCosmosHash(`${book.id}|${book.title}|${book.author}`);
                     const angle = galaxy.angle + index * 2.399963229728653;
                     const distance = index === 0 ? 0 : 34 * Math.sqrt(index);
-                    const radius = 12.8;
+                    const readingDepth = normalizeReadingDepth(book.readingDepth);
+                    const radius = readingDepth === 'core' ? 15.8 : readingDepth === 'deep' ? 14.2 : 12.8;
                     furthestEdge = Math.max(furthestEdge, distance + radius);
                     cosmosState.planets.push({
                         id: book.id,
@@ -4641,6 +4756,9 @@ async function ensureReadingInsightConsent() {
                         author: book.author,
                         category: galaxy.category,
                         rating: book.rating,
+                        readingDepth,
+                        importance: normalizeBookImportance(book.importance),
+                        readingMinutes: normalizeReadingMinutes(book.readingMinutes),
                         x: galaxy.x + Math.cos(angle) * distance,
                         y: galaxy.y + Math.sin(angle) * distance,
                         radius,
@@ -4737,7 +4855,7 @@ async function ensureReadingInsightConsent() {
                 const isFocused = cosmosState.focusedPlanetId === p.id;
 
                 cosmosCtx.save();
-                cosmosCtx.shadowBlur = isHovered ? 18 : 8;
+                cosmosCtx.shadowBlur = isHovered ? 18 : 6 + Math.max(0, Number(p.rating || 0)) * 1.2;
                 cosmosCtx.shadowColor = p.color;
 
                 const grad = cosmosCtx.createRadialGradient(p.x_eval - p.radius*0.2, p.y_eval - p.radius*0.2, p.radius*0.05, p.x_eval, p.y_eval, p.radius);
@@ -4763,6 +4881,14 @@ async function ensureReadingInsightConsent() {
                     cosmosCtx.strokeStyle = `${p.color}66`;
                     cosmosCtx.beginPath();
                     cosmosCtx.ellipse(p.x_eval, p.y_eval, p.radius * 1.5, p.radius * 0.4, Math.PI / 6, 0, Math.PI * 2);
+                    cosmosCtx.stroke();
+                }
+
+                if (p.importance >= 2) {
+                    cosmosCtx.strokeStyle = p.importance >= 3 ? 'rgba(255,255,255,.72)' : `${p.color}88`;
+                    cosmosCtx.lineWidth = p.importance >= 3 ? 1.5 : 1;
+                    cosmosCtx.beginPath();
+                    cosmosCtx.arc(p.x_eval, p.y_eval, p.radius + (p.importance >= 3 ? 6 : 4), 0, Math.PI * 2);
                     cosmosCtx.stroke();
                 }
 
