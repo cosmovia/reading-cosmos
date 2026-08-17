@@ -1,5 +1,9 @@
 import "jsr:@supabase/functions-js@2.5.0/edge-runtime.d.ts";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import {
+  executeTaskProviderRoutes,
+  ProviderCircuitRegistry,
+} from "./provider-routing.ts";
 
 const TASK_TYPES = ["book_overview", "note_assistance", "reading_insight"] as const;
 type TaskType = typeof TASK_TYPES[number];
@@ -17,11 +21,27 @@ const DAILY_GENERATION_LIMIT: Record<TaskType, number> = {
   reading_insight: 3,
 };
 const REQUEST_TIMEOUT_MS = 55_000;
-const PROVIDER_ROUTES = [{ provider: PROVIDER, modelEnv: "GLM_MODEL", defaultModel: DEFAULT_MODEL }] as const;
+type ProviderRoute = {
+  provider: string;
+  apiKeyEnv: string;
+  modelEnv: string;
+  defaultModel: string;
+  tasks: readonly TaskType[];
+  call: typeof callGlm;
+};
+const PROVIDER_ROUTES: ProviderRoute[] = [{
+  provider: PROVIDER,
+  apiKeyEnv: "GLM_API_KEY",
+  modelEnv: "GLM_MODEL",
+  defaultModel: DEFAULT_MODEL,
+  tasks: TASK_TYPES,
+  call: callGlm,
+}];
 const NOTE_FIELDS = ["summary", "concepts", "thoughts", "actions"] as const;
 const NOTE_OPERATIONS = ["regenerate", "generate", "polish"] as const;
-const inFlightRequests = new Map<string, Promise<ProviderResult>>();
-const providerCircuit = { failures: 0, openUntil: 0 };
+type ProviderCallResult = Awaited<ReturnType<typeof callGlm>> & { attempts: number };
+const inFlightRequests = new Map<string, Promise<ProviderCallResult>>();
+const providerCircuits = new ProviderCircuitRegistry();
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -41,13 +61,22 @@ type GatewayBody = {
 
 type UsageStatus = { limit: number; used: number; remaining: number };
 
-type ProviderResult = Awaited<ReturnType<typeof callGlm>> & { attempts: number };
+type ProviderResult = Awaited<ReturnType<typeof callGlm>> & {
+  attempts: number;
+  provider: string;
+  model: string;
+  fallbackIndex: number;
+};
 
 type ProviderFailure = Error & {
   code: string;
   status: number;
   retryable: boolean;
   retryAfterMs: number;
+  attempts?: number;
+  provider?: string;
+  model?: string;
+  fallbackIndex?: number;
 };
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -66,6 +95,7 @@ function safeErrorMessage(code: string): string {
     UNAVAILABLE: "AI 服务暂时不可用，请稍后重试",
     INVALID_RESPONSE: "AI 返回内容无法识别，本次结果未保存",
     BUDGET: "平台 AI 额度暂时不可用，请稍后重试",
+    NOT_CONFIGURED: "平台 AI 服务尚未配置",
     CIRCUIT_OPEN: "AI 服务连续失败，已暂时进入冷却状态，请稍后重试",
     REQUEST: "AI 请求暂时无法处理，请稍后重试",
   };
@@ -270,24 +300,31 @@ function parseReadingInsight(content: string): Record<string, unknown> {
   return result;
 }
 
-async function executeProviderWithReliability(
+function getProviderCircuit(provider: string) {
+  return providerCircuits.get(provider);
+}
+
+async function executeRouteWithReliability(
   key: string,
+  route: ProviderRoute,
   apiKey: string,
   model: string,
   messages: Array<{ role: string; content: string }>,
   webSearch = false,
-): Promise<ProviderResult> {
+): Promise<Awaited<ReturnType<typeof callGlm>> & { attempts: number }> {
+  const providerCircuit = getProviderCircuit(route.provider);
   if (providerCircuit.openUntil > Date.now()) throw providerFailure("CIRCUIT_OPEN");
   const existing = inFlightRequests.get(key);
   if (existing) return existing;
 
   const request = (async () => {
     let finalFailure: ProviderFailure | null = null;
+    let attemptCount = 0;
     for (let attempt = 0; attempt < 2; attempt += 1) {
+      attemptCount += 1;
       try {
-        const result = await callGlm(apiKey, model, messages, webSearch);
-        providerCircuit.failures = 0;
-        providerCircuit.openUntil = 0;
+        const result = await route.call(apiKey, model, messages, webSearch);
+        providerCircuits.recordSuccess(route.provider);
         return { ...result, attempts: attempt + 1 };
       } catch (rawError) {
         finalFailure = normalizeProviderFailure(rawError);
@@ -299,9 +336,9 @@ async function executeProviderWithReliability(
     }
     const failure = finalFailure ?? providerFailure("UNAVAILABLE");
     if (failure.retryable) {
-      providerCircuit.failures += 1;
-      if (providerCircuit.failures >= 3) providerCircuit.openUntil = Date.now() + 5 * 60_000;
+      providerCircuits.recordRetryableFailure(route.provider);
     }
+    failure.attempts = attemptCount;
     throw failure;
   })();
   inFlightRequests.set(key, request);
@@ -310,6 +347,33 @@ async function executeProviderWithReliability(
   } finally {
     inFlightRequests.delete(key);
   }
+}
+
+async function executeProviderRoutes(
+  key: string,
+  taskType: TaskType,
+  messages: Array<{ role: string; content: string }>,
+  webSearch = false,
+): Promise<ProviderResult> {
+  const routes = PROVIDER_ROUTES.map((route) => {
+    const apiKey = Deno.env.get(route.apiKeyEnv) ?? "";
+    const model = Deno.env.get(route.modelEnv) || route.defaultModel;
+    return {
+      provider: route.provider,
+      model,
+      configured: Boolean(apiKey),
+      tasks: route.tasks,
+      execute: () => executeRouteWithReliability(
+        `${key}|${route.provider}|${model}`,
+        route,
+        apiKey,
+        model,
+        messages,
+        webSearch,
+      ),
+    };
+  });
+  return await executeTaskProviderRoutes(taskType, routes);
 }
 
 async function callGlm(
@@ -378,6 +442,30 @@ async function callGlm(
   }
 }
 
+function buildTaskServiceStatus(
+  taskType: TaskType,
+  configuredRoutes: ProviderRoute[],
+  now = Date.now(),
+) {
+  const taskRoutes = configuredRoutes.filter((route) => route.tasks.includes(taskType));
+  const routeStates = taskRoutes.map((route) => ({
+    route,
+    circuit: getProviderCircuit(route.provider),
+  }));
+  const availableRouteState = routeStates.find(({ circuit }) => circuit.openUntil <= now);
+  const statusRoute = availableRouteState?.route ?? taskRoutes[0] ?? null;
+  const allCircuitsOpen = routeStates.length > 0 && !availableRouteState;
+  return {
+    status: taskRoutes.length === 0 ? "not_configured" : allCircuitsOpen ? "cooling_down" : "available",
+    activeProvider: statusRoute?.provider ?? null,
+    activeModel: statusRoute ? Deno.env.get(statusRoute.modelEnv) || statusRoute.defaultModel : null,
+    fallbackEnabled: taskRoutes.length > 1,
+    availableAt: allCircuitsOpen
+      ? new Date(Math.min(...routeStates.map(({ circuit }) => circuit.openUntil))).toISOString()
+      : null,
+  };
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return jsonResponse({ error: { code: "METHOD_NOT_ALLOWED" } }, 405);
@@ -392,8 +480,8 @@ Deno.serve(async (req: Request) => {
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   const anonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-  const glmApiKey = Deno.env.get("GLM_API_KEY") ?? "";
-  const model = Deno.env.get("GLM_MODEL") || DEFAULT_MODEL;
+  const configuredRoutes = PROVIDER_ROUTES.filter((route) => Boolean(Deno.env.get(route.apiKeyEnv)));
+  const activeRoute = configuredRoutes[0] ?? PROVIDER_ROUTES[0];
 
   const userClient = createClient(supabaseUrl, anonKey, {
     global: { headers: { Authorization: authHeader } },
@@ -426,15 +514,21 @@ Deno.serve(async (req: Request) => {
         userClient.from("user_settings").select("ai_note_consent_at, ai_insight_consent_at").eq("user_id", userData.user.id).maybeSingle(),
       ]);
       if (settingsResult.error) throw settingsResult.error;
-      const circuitOpen = providerCircuit.openUntil > Date.now();
+      const taskStatus = {
+        bookOverview: buildTaskServiceStatus("book_overview", configuredRoutes),
+        noteAssistance: buildTaskServiceStatus("note_assistance", configuredRoutes),
+        readingInsight: buildTaskServiceStatus("reading_insight", configuredRoutes),
+      };
       return jsonResponse({
         requestId,
         gateway: {
-          status: !glmApiKey ? "not_configured" : circuitOpen ? "cooling_down" : "available",
-          activeProvider: PROVIDER,
-          activeModel: model,
-          fallbackEnabled: PROVIDER_ROUTES.length > 1,
-          availableAt: circuitOpen ? new Date(providerCircuit.openUntil).toISOString() : null,
+          status: taskStatus.bookOverview.status,
+          activeProvider: taskStatus.bookOverview.activeProvider,
+          activeModel: taskStatus.bookOverview.activeModel,
+          fallbackEnabled: taskStatus.bookOverview.fallbackEnabled,
+          configuredProviders: configuredRoutes.map((route) => route.provider),
+          availableAt: taskStatus.bookOverview.availableAt,
+          tasks: taskStatus,
         },
         quota: { bookOverview, noteAssistance, readingInsight, resetsAt: nextUtcDayStart() },
         consent: {
@@ -450,6 +544,9 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ requestId, error: { code: "INVALID_REQUEST", message: "不支持的 AI 任务" } }, 400);
   }
   const taskType = body.taskType as TaskType;
+  const taskPrimaryRoute = configuredRoutes.find((route) => route.tasks.includes(taskType)) ??
+    PROVIDER_ROUTES.find((route) => route.tasks.includes(taskType)) ?? activeRoute;
+  const taskPrimaryModel = Deno.env.get(taskPrimaryRoute.modelEnv) || taskPrimaryRoute.defaultModel;
   if (taskType !== "reading_insight" && !body.bookId) {
     return jsonResponse({ requestId, error: { code: "INVALID_REQUEST", message: "缺少书籍标识" } }, 400);
   }
@@ -591,7 +688,7 @@ Deno.serve(async (req: Request) => {
       },
     }, 429);
   }
-  if (!glmApiKey) {
+  if (configuredRoutes.length === 0) {
     return jsonResponse({ requestId, error: { code: "GATEWAY_NOT_CONFIGURED", message: "平台 AI 服务尚未配置" } }, 503);
   }
 
@@ -610,12 +707,9 @@ Deno.serve(async (req: Request) => {
     inputHash,
   ].join("|");
   try {
-    const route = PROVIDER_ROUTES[0];
-    const routedModel = Deno.env.get(route.modelEnv) || route.defaultModel;
-    const result = await executeProviderWithReliability(
+    const result = await executeProviderRoutes(
       dedupeKey,
-      glmApiKey,
-      routedModel,
+      taskType,
       messages,
       taskType === "book_overview",
     );
@@ -635,8 +729,8 @@ Deno.serve(async (req: Request) => {
           prompt_version: promptVersion,
           content: taskType === "reading_insight" ? insightContent : { text: result.content },
           sources: taskType === "reading_insight" ? [] : result.sources,
-          provider: PROVIDER,
-          model: routedModel,
+          provider: result.provider,
+          model: result.model,
           generated_at: generatedAt,
           expires_at: null,
         }, { onConflict: "user_id,task_type,scope_key,input_hash,prompt_version" })
@@ -651,14 +745,14 @@ Deno.serve(async (req: Request) => {
         user_id: userData.user.id,
         book_id: book?.id || null,
         task_type: taskType,
-        provider: PROVIDER,
-        model: routedModel,
+        provider: result.provider,
+        model: result.model,
         status: "succeeded",
         latency_ms: Date.now() - startedAt,
         input_tokens: result.inputTokens,
         output_tokens: result.outputTokens,
         cache_hit: false,
-        fallback_index: 0,
+        fallback_index: result.fallbackIndex,
         prompt_version: promptVersion,
         attempts: result.attempts,
       });
@@ -667,7 +761,7 @@ Deno.serve(async (req: Request) => {
         requestId,
         attempts: result.attempts,
         remaining: Math.max(0, dailyLimit - dailyCount - 1),
-        suggestion: { content: result.content, provider: PROVIDER, model: routedModel, generatedAt, promptVersion },
+        suggestion: { content: result.content, provider: result.provider, model: result.model, generatedAt, promptVersion },
       });
     }
     if (taskType === "reading_insight") {
@@ -680,8 +774,8 @@ Deno.serve(async (req: Request) => {
           id: artifactId,
           content: insightContent,
           sources: [],
-          provider: PROVIDER,
-          model: routedModel,
+          provider: result.provider,
+          model: result.model,
           generatedAt,
           promptVersion,
         },
@@ -696,28 +790,31 @@ Deno.serve(async (req: Request) => {
         id: artifactId,
         content: result.content,
         sources: result.sources,
-        provider: PROVIDER,
-        model: routedModel,
+        provider: result.provider,
+        model: result.model,
         generatedAt,
         promptVersion,
       },
     });
   } catch (rawError) {
     const failure = normalizeProviderFailure(rawError);
+    const failedProvider = failure.provider || taskPrimaryRoute.provider;
+    const failedModel = failure.model || taskPrimaryModel;
+    const failedCircuit = getProviderCircuit(failedProvider);
     await adminClient.from("ai_generations").insert({
       request_id: requestId,
       user_id: userData.user.id,
       book_id: book?.id || null,
       task_type: taskType,
-      provider: PROVIDER,
-      model,
+      provider: failedProvider,
+      model: failedModel,
       status: "failed",
       error_code: failure.code,
       latency_ms: Date.now() - startedAt,
       cache_hit: false,
-      fallback_index: 0,
+      fallback_index: failure.fallbackIndex ?? 0,
       prompt_version: promptVersion,
-      attempts: 1,
+      attempts: failure.attempts ?? 0,
     });
     const responseStatus = failure.code === "RATE_LIMIT" ? 429 : failure.code === "TIMEOUT" ? 504 : 503;
     return jsonResponse({
@@ -726,8 +823,8 @@ Deno.serve(async (req: Request) => {
         code: failure.code,
         message: safeErrorMessage(failure.code),
         retryAfterSeconds: failure.retryAfterMs > 0 ? Math.ceil(failure.retryAfterMs / 1000) : null,
-        availableAt: failure.code === "CIRCUIT_OPEN" && providerCircuit.openUntil > Date.now()
-          ? new Date(providerCircuit.openUntil).toISOString()
+        availableAt: failure.code === "CIRCUIT_OPEN" && failedCircuit.openUntil > Date.now()
+          ? new Date(failedCircuit.openUntil).toISOString()
           : null,
       },
     }, responseStatus);
