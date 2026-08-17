@@ -23,6 +23,7 @@ const DAILY_GENERATION_LIMIT: Record<TaskType, number> = {
   reading_insight: 3,
 };
 const REQUEST_TIMEOUT_MS = 55_000;
+const PROVIDER_PROBE_COOLDOWN_MS = 5 * 60_000;
 type ProviderRoute = {
   provider: string;
   apiKeyEnv: string;
@@ -59,6 +60,7 @@ const NOTE_OPERATIONS = ["regenerate", "generate", "polish"] as const;
 type ProviderCallOutput = Awaited<ReturnType<typeof callGlm>> & { resolvedModel?: string };
 type ProviderCallResult = ProviderCallOutput & { attempts: number };
 const inFlightRequests = new Map<string, Promise<ProviderCallResult>>();
+const providerProbeTimes = new Map<string, number>();
 const providerCircuits = new ProviderCircuitRegistry();
 
 const corsHeaders = {
@@ -611,6 +613,57 @@ Deno.serve(async (req: Request) => {
       });
     } catch {
       return jsonResponse({ requestId, error: { code: "DATABASE", message: "暂时无法读取平台 AI 状态" } }, 500);
+    }
+  }
+  if (body.taskType === "provider_probe") {
+    const route = configuredRoutes.find((item) => item.provider === "openrouter");
+    if (!route) {
+      return jsonResponse({
+        requestId,
+        error: { code: "NOT_CONFIGURED", message: "OpenRouter 备用路由尚未配置" },
+      }, 503);
+    }
+    const previousProbeAt = providerProbeTimes.get(userData.user.id) ?? 0;
+    const retryAfterMs = previousProbeAt + PROVIDER_PROBE_COOLDOWN_MS - Date.now();
+    if (retryAfterMs > 0) {
+      return jsonResponse({
+        requestId,
+        error: {
+          code: "PROBE_COOLDOWN",
+          message: "备用路由刚刚验证过，请稍后再试",
+          retryAfterSeconds: Math.ceil(retryAfterMs / 1_000),
+        },
+      }, 429);
+    }
+    providerProbeTimes.set(userData.user.id, Date.now());
+    const apiKey = Deno.env.get(route.apiKeyEnv) ?? "";
+    const model = Deno.env.get(route.modelEnv) || route.defaultModel;
+    try {
+      const result = await executeRouteWithReliability(
+        `probe|${userData.user.id}|${route.provider}|${model}`,
+        route,
+        apiKey,
+        model,
+        [
+          { role: "system", content: "这是服务连通性检查。不得索取或推断用户信息。" },
+          { role: "user", content: "请只回复 READY。" },
+        ],
+      );
+      return jsonResponse({
+        requestId,
+        probe: {
+          status: "available",
+          provider: route.provider,
+          model: result.resolvedModel || model,
+          attempts: result.attempts,
+        },
+      });
+    } catch (rawError) {
+      const failure = normalizeProviderFailure(rawError);
+      return jsonResponse({
+        requestId,
+        error: { code: failure.code, message: safeErrorMessage(failure.code) },
+      }, failure.status || 503);
     }
   }
   if (!TASK_TYPES.includes(body.taskType as TaskType)) {
