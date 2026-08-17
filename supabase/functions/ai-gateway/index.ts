@@ -15,6 +15,8 @@ const PROMPT_VERSIONS: Record<TaskType, string> = {
 const PROVIDER = "zhipu";
 const DEFAULT_MODEL = "glm-4.7-flash";
 const GLM_ENDPOINT = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
+const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
+const OPENROUTER_DEFAULT_MODEL = "openrouter/free";
 const DAILY_GENERATION_LIMIT: Record<TaskType, number> = {
   book_overview: 10,
   note_assistance: 20,
@@ -27,19 +29,35 @@ type ProviderRoute = {
   modelEnv: string;
   defaultModel: string;
   tasks: readonly TaskType[];
-  call: typeof callGlm;
+  call: (
+    apiKey: string,
+    model: string,
+    messages: Array<{ role: string; content: string }>,
+    webSearch?: boolean,
+  ) => Promise<ProviderCallOutput>;
 };
-const PROVIDER_ROUTES: ProviderRoute[] = [{
-  provider: PROVIDER,
-  apiKeyEnv: "GLM_API_KEY",
-  modelEnv: "GLM_MODEL",
-  defaultModel: DEFAULT_MODEL,
-  tasks: TASK_TYPES,
-  call: callGlm,
-}];
+const PROVIDER_ROUTES: ProviderRoute[] = [
+  {
+    provider: PROVIDER,
+    apiKeyEnv: "GLM_API_KEY",
+    modelEnv: "GLM_MODEL",
+    defaultModel: DEFAULT_MODEL,
+    tasks: TASK_TYPES,
+    call: callGlm,
+  },
+  {
+    provider: "openrouter",
+    apiKeyEnv: "OPENROUTER_API_KEY",
+    modelEnv: "OPENROUTER_MODEL",
+    defaultModel: OPENROUTER_DEFAULT_MODEL,
+    tasks: ["book_overview"],
+    call: callOpenRouter,
+  },
+];
 const NOTE_FIELDS = ["summary", "concepts", "thoughts", "actions"] as const;
 const NOTE_OPERATIONS = ["regenerate", "generate", "polish"] as const;
-type ProviderCallResult = Awaited<ReturnType<typeof callGlm>> & { attempts: number };
+type ProviderCallOutput = Awaited<ReturnType<typeof callGlm>> & { resolvedModel?: string };
+type ProviderCallResult = ProviderCallOutput & { attempts: number };
 const inFlightRequests = new Map<string, Promise<ProviderCallResult>>();
 const providerCircuits = new ProviderCircuitRegistry();
 
@@ -61,7 +79,7 @@ type GatewayBody = {
 
 type UsageStatus = { limit: number; used: number; remaining: number };
 
-type ProviderResult = Awaited<ReturnType<typeof callGlm>> & {
+type ProviderResult = ProviderCallOutput & {
   attempts: number;
   provider: string;
   model: string;
@@ -311,7 +329,7 @@ async function executeRouteWithReliability(
   model: string,
   messages: Array<{ role: string; content: string }>,
   webSearch = false,
-): Promise<Awaited<ReturnType<typeof callGlm>> & { attempts: number }> {
+): Promise<ProviderCallResult> {
   const providerCircuit = getProviderCircuit(route.provider);
   if (providerCircuit.openUntil > Date.now()) throw providerFailure("CIRCUIT_OPEN");
   const existing = inFlightRequests.get(key);
@@ -436,6 +454,61 @@ async function callGlm(
       sources,
       inputTokens: Number(usage?.prompt_tokens ?? 0) || null,
       outputTokens: Number(usage?.completion_tokens ?? 0) || null,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function callOpenRouter(
+  apiKey: string,
+  model: string,
+  messages: Array<{ role: string; content: string }>,
+  _webSearch = false,
+) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const fallbackMessages = [
+      {
+        role: "system",
+        content: "当前备用模型不保证具备实时联网检索能力。不得声称已经联网或引用未经核验的来源；只使用可靠的通用知识，无法确认的版本、情节或事实必须明确说明不确定。",
+      },
+      ...messages,
+    ];
+    const response = await fetch(OPENROUTER_ENDPOINT, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://cosmovia.github.io/reading-cosmos/",
+        "X-OpenRouter-Title": "Reading Cosmos",
+      },
+      body: JSON.stringify({
+        model,
+        messages: fallbackMessages,
+        temperature: 0.35,
+        max_tokens: 1_800,
+        stream: false,
+        provider: { allow_fallbacks: true },
+      }),
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
+    if (!response.ok) throw classifyProviderResponse(response, payload);
+
+    const choices = payload.choices as Array<{ message?: { content?: unknown } }> | undefined;
+    const content = choices?.[0]?.message?.content;
+    if (typeof content !== "string" || !content.trim()) {
+      throw providerFailure("INVALID_RESPONSE", response.status, true);
+    }
+    const usage = payload.usage as Record<string, unknown> | undefined;
+    return {
+      content: content.trim(),
+      sources: [],
+      inputTokens: Number(usage?.prompt_tokens ?? 0) || null,
+      outputTokens: Number(usage?.completion_tokens ?? 0) || null,
+      resolvedModel: String(payload.model ?? model),
     };
   } finally {
     clearTimeout(timeout);
