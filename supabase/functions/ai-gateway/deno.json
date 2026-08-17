@@ -1,6 +1,8 @@
 {
+  "tasks": {
+    "test": "deno test provider-routing.test.ts"
+  },
   "imports": {
     "@supabase/supabase-js": "npm:@supabase/supabase-js@2.95.0"
   }
 }
-

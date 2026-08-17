@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js@2.5.0/edge-runtime.d.ts";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { ProviderCircuitRegistry, shouldTryNextProvider } from "./provider-routing.ts";
 
 const TASK_TYPES = ["book_overview", "note_assistance", "reading_insight"] as const;
 type TaskType = typeof TASK_TYPES[number];
@@ -35,7 +36,7 @@ const NOTE_FIELDS = ["summary", "concepts", "thoughts", "actions"] as const;
 const NOTE_OPERATIONS = ["regenerate", "generate", "polish"] as const;
 type ProviderCallResult = Awaited<ReturnType<typeof callGlm>> & { attempts: number };
 const inFlightRequests = new Map<string, Promise<ProviderCallResult>>();
-const providerCircuits = new Map<string, { failures: number; openUntil: number }>();
+const providerCircuits = new ProviderCircuitRegistry();
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -295,15 +296,7 @@ function parseReadingInsight(content: string): Record<string, unknown> {
 }
 
 function getProviderCircuit(provider: string) {
-  const existing = providerCircuits.get(provider);
-  if (existing) return existing;
-  const circuit = { failures: 0, openUntil: 0 };
-  providerCircuits.set(provider, circuit);
-  return circuit;
-}
-
-function shouldTryNextRoute(failure: ProviderFailure): boolean {
-  return ["RATE_LIMIT", "TIMEOUT", "NETWORK", "UNAVAILABLE", "CIRCUIT_OPEN"].includes(failure.code);
+  return providerCircuits.get(provider);
 }
 
 async function executeRouteWithReliability(
@@ -326,8 +319,7 @@ async function executeRouteWithReliability(
       attemptCount += 1;
       try {
         const result = await route.call(apiKey, model, messages, webSearch);
-        providerCircuit.failures = 0;
-        providerCircuit.openUntil = 0;
+        providerCircuits.recordSuccess(route.provider);
         return { ...result, attempts: attempt + 1 };
       } catch (rawError) {
         finalFailure = normalizeProviderFailure(rawError);
@@ -339,8 +331,7 @@ async function executeRouteWithReliability(
     }
     const failure = finalFailure ?? providerFailure("UNAVAILABLE");
     if (failure.retryable) {
-      providerCircuit.failures += 1;
-      if (providerCircuit.failures >= 3) providerCircuit.openUntil = Date.now() + 5 * 60_000;
+      providerCircuits.recordRetryableFailure(route.provider);
     }
     failure.attempts = attemptCount;
     throw failure;
@@ -355,6 +346,7 @@ async function executeRouteWithReliability(
 
 async function executeProviderRoutes(
   key: string,
+  taskType: TaskType,
   messages: Array<{ role: string; content: string }>,
   webSearch = false,
 ): Promise<ProviderResult> {
@@ -385,7 +377,7 @@ async function executeProviderRoutes(
       failure.fallbackIndex = fallbackIndex;
       failure.attempts = totalAttempts;
       finalFailure = failure;
-      if (!shouldTryNextRoute(failure)) break;
+      if (!shouldTryNextProvider(taskType, failure.code)) break;
     }
   }
   if (configuredRoutes === 0) throw providerFailure("NOT_CONFIGURED");
@@ -705,6 +697,7 @@ Deno.serve(async (req: Request) => {
   try {
     const result = await executeProviderRoutes(
       dedupeKey,
+      taskType,
       messages,
       taskType === "book_overview",
     );
