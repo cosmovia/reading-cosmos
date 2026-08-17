@@ -829,6 +829,17 @@
         }
         .reading-profile-control:disabled { background:#f1f5f9; color:#64748b; cursor:default; }
 
+        .bridge-list { display:flex; flex-direction:column; gap:8px; margin-top:10px; }
+        .bridge-item { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; padding:10px 12px; border:1px solid #e2e8f0; border-radius:12px; background:#f8fafc; }
+        .bridge-item-main { min-width:0; color:#475569; font-size:.82rem; line-height:1.5; }
+        .bridge-item-main strong { color:#0f172a; }
+        .bridge-delete { border:0; background:transparent; color:#94a3b8; cursor:pointer; padding:2px 4px; }
+        .bridge-form { display:none; grid-template-columns:1.4fr 1fr .7fr; gap:8px; margin-top:12px; }
+        .bridge-form.active { display:grid; }
+        .bridge-form .bridge-note { grid-column:1 / -1; }
+        .bridge-form .btn-primary { grid-column:1 / -1; justify-self:start; }
+        @media (max-width:700px) { .bridge-form { grid-template-columns:1fr; } .bridge-form .bridge-note, .bridge-form .btn-primary { grid-column:auto; } }
+
         .rating-label {
             font-size: 0.8rem;
             color: var(--text-secondary);
@@ -2013,6 +2024,28 @@
                 </div>
 
                 <div class="detail-module">
+                    <div class="module-header">
+                        <span class="module-title-absolute">知识桥梁</span>
+                    </div>
+                    <div class="module-content-text">由你确认两本书之间的思想关系，AI 不会自动替你建立连接。</div>
+                    <div class="bridge-list" id="book-bridge-list"></div>
+                    <div class="bridge-form" id="book-bridge-form">
+                        <select id="bridge-target-book" class="form-input" aria-label="连接到书籍"></select>
+                        <select id="bridge-type" class="form-input" aria-label="关系类型">
+                            <option value="resonates">思想共鸣</option>
+                            <option value="extends">延伸发展</option>
+                            <option value="contrasts">对照冲突</option>
+                            <option value="supports">相互支撑</option>
+                        </select>
+                        <select id="bridge-strength" class="form-input" aria-label="关系强度">
+                            <option value="1">弱连接</option><option value="2">中连接</option><option value="3">强连接</option>
+                        </select>
+                        <input id="bridge-note" class="form-input bridge-note" maxlength="240" placeholder="为什么它们产生联系？（可选）">
+                        <button type="button" class="btn-primary" onclick="createBookRelationship()">建立知识桥梁</button>
+                    </div>
+                </div>
+
+                <div class="detail-module">
                     <div class="ai-loading-mask"><div class="spinner"></div></div>
                     <div class="module-header">
                         <span class="module-title-absolute" id="mod-concepts-title">主要人物 / 关键概念解析</span>
@@ -3183,6 +3216,33 @@ async function loadBooksFromSupabase(user = currentUser) {
 
     return true;
 }
+
+async function loadBookRelationships(user = currentUser) {
+    if (!user) {
+        bookRelationships = [];
+        return true;
+    }
+    const { data, error } = await supabaseClient
+        .from('book_relationships')
+        .select('id, source_book_id, target_book_id, relationship_type, strength, note')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: true });
+    if (error) {
+        console.error('读取知识桥梁失败', error);
+        bookRelationships = [];
+        return false;
+    }
+    const localIdByCloudId = new Map(booksData.map(book => [book.cloudId, book.id]));
+    bookRelationships = (data || []).map(item => ({
+        id: item.id,
+        sourceBookId: localIdByCloudId.get(item.source_book_id),
+        targetBookId: localIdByCloudId.get(item.target_book_id),
+        type: item.relationship_type,
+        strength: Number(item.strength || 1),
+        note: item.note || ''
+    })).filter(item => item.sourceBookId && item.targetBookId);
+    return true;
+}
 // =============================
 // Supabase连接测试
 // =============================
@@ -3230,6 +3290,7 @@ async function loadBooksFromSupabase(user = currentUser) {
         ];
 
         let booksData = [];
+        let bookRelationships = [];
         let currentUser = null;
         let currentView = 'shelf';
         let activeBookId = null;
@@ -3384,6 +3445,7 @@ async function loadBooksFromSupabase(user = currentUser) {
 
         function showGuestShelf() {
             currentUser = null;
+            bookRelationships = [];
             activeBookId = null;
             managedReadingInsight = null;
             isEditing = false;
@@ -3407,6 +3469,8 @@ async function loadBooksFromSupabase(user = currentUser) {
 
             const loaded =
                 await loadBooksFromSupabase(currentUser);
+
+            if (loaded) await loadBookRelationships(currentUser);
 
             if (!loaded) {
                 booksData = [];
@@ -3481,6 +3545,7 @@ function getCategoryStyle(cat) {
                 await loadBooksFromSupabase(currentUser);
 
             if (!loaded) booksData = [];
+            else await loadBookRelationships(currentUser);
         } else {
             booksData = createDemoBooks();
         }
@@ -4115,6 +4180,7 @@ function getCategoryStyle(cat) {
             document.getElementById('detail-reading-depth').value = book.readingDepth;
             document.getElementById('detail-book-importance').value = String(book.importance);
             document.getElementById('detail-reading-minutes').value = String(book.readingMinutes);
+            renderBookRelationships(book);
 
             document.getElementById('detail-cover-slot').innerHTML = createBookCover(book);
             document.getElementById('detail-cover-url-input').value = getSafeBookCoverUrl(book.coverUrl);
@@ -4171,6 +4237,7 @@ function getCategoryStyle(cat) {
             const toggleBtn = document.getElementById('detail-master-edit-btn');
             const editElements = document.querySelectorAll('.edit-only-btn');
             const coverEditPanel = document.getElementById('cover-edit-panel');
+            const bridgeForm = document.getElementById('book-bridge-form');
             const cosmosProfileControls = document.querySelectorAll('.reading-profile-control');
             const fields = ['concepts', 'thoughts', 'actions'];
             
@@ -4188,6 +4255,7 @@ function getCategoryStyle(cat) {
 
                 explanationElements.forEach(el => el.style.display = 'block');
                 coverEditPanel?.classList.add('active');
+                bridgeForm?.classList.add('active');
                 cosmosProfileControls.forEach(control => control.disabled = !currentUser);
             } else {
                 toggleBtn.innerText = '✏️'; 
@@ -4195,6 +4263,7 @@ function getCategoryStyle(cat) {
                 editElements.forEach(el => el.style.display = 'none');
                 explanationElements.forEach(el => el.style.display = 'none');
                 coverEditPanel?.classList.remove('active');
+                bridgeForm?.classList.remove('active');
                 cosmosProfileControls.forEach(control => control.disabled = true);
                 fields.forEach(f => {
                     document.getElementById(`mod-${f}-text`).style.display = 'block';
@@ -4206,6 +4275,7 @@ function getCategoryStyle(cat) {
             }
 
             if (book) {
+                renderBookRelationships(book);
                 ['summary', 'concepts', 'thoughts', 'actions'].forEach(field => {
                     renderAIOutput(field, getTransientNoteSuggestion(book.id, field), book.notesRevision);
                 });
@@ -4320,6 +4390,85 @@ function getCategoryStyle(cat) {
             document.getElementById('detail-book-importance').value = String(book.importance);
             document.getElementById('detail-reading-minutes').value = String(book.readingMinutes);
             await saveToLocalStorage();
+            rebuildUniversePlanets();
+        }
+
+        const RELATIONSHIP_LABELS = {
+            resonates: '思想共鸣',
+            extends: '延伸发展',
+            contrasts: '对照冲突',
+            supports: '相互支撑'
+        };
+
+        function renderBookRelationships(book) {
+            const list = document.getElementById('book-bridge-list');
+            const targetSelect = document.getElementById('bridge-target-book');
+            if (!list || !targetSelect || !book) return;
+            targetSelect.innerHTML = booksData
+                .filter(candidate => !candidate.isDemo && candidate.id !== book.id)
+                .map(candidate => `<option value="${escapeHTML(candidate.id)}">${escapeHTML(normalizeBookTitle(candidate.title))} · ${escapeHTML(candidate.author || '未知作者')}</option>`)
+                .join('');
+            const relationships = bookRelationships.filter(item =>
+                item.sourceBookId === book.id || item.targetBookId === book.id
+            );
+            if (!relationships.length) {
+                list.innerHTML = '<div class="module-content-text">尚未建立知识桥梁。</div>';
+                return;
+            }
+            list.innerHTML = relationships.map(item => {
+                const otherId = item.sourceBookId === book.id ? item.targetBookId : item.sourceBookId;
+                const otherBook = booksData.find(candidate => candidate.id === otherId);
+                const strength = '●'.repeat(Math.max(1, Math.min(3, item.strength)));
+                return `<div class="bridge-item">
+                    <div class="bridge-item-main"><strong>${escapeHTML(normalizeBookTitle(otherBook?.title || '未知书籍'))}</strong> · ${escapeHTML(RELATIONSHIP_LABELS[item.type] || '思想联系')} · ${strength}${item.note ? `<br>${escapeHTML(item.note)}` : ''}</div>
+                    ${currentUser && isEditing ? `<button class="bridge-delete" type="button" onclick="deleteBookRelationship('${escapeHTML(item.id)}')" aria-label="删除知识桥梁">✕</button>` : ''}
+                </div>`;
+            }).join('');
+        }
+
+        async function createBookRelationship() {
+            if (!requireAuthenticatedUser() || !activeBookId || !isEditing) return;
+            const sourceBook = booksData.find(book => book.id === activeBookId);
+            const targetBook = booksData.find(book => book.id === document.getElementById('bridge-target-book').value);
+            if (!sourceBook?.cloudId || !targetBook?.cloudId) {
+                showAIStatus('书籍尚未完成云同步，暂时无法建立桥梁', 'warning', 4500);
+                return;
+            }
+            const payload = {
+                user_id: currentUser.id,
+                source_book_id: sourceBook.cloudId,
+                target_book_id: targetBook.cloudId,
+                relationship_type: document.getElementById('bridge-type').value,
+                strength: Number(document.getElementById('bridge-strength').value || 1),
+                note: document.getElementById('bridge-note').value.trim(),
+                updated_at: new Date().toISOString()
+            };
+            const { error } = await supabaseClient.from('book_relationships').upsert(payload, {
+                onConflict: 'user_id,source_book_id,target_book_id'
+            });
+            if (error) {
+                showAIStatus('知识桥梁保存失败，请稍后重试', 'warning', 4500);
+                return;
+            }
+            document.getElementById('bridge-note').value = '';
+            await loadBookRelationships(currentUser);
+            renderBookRelationships(sourceBook);
+            rebuildUniversePlanets();
+            showAIStatus('知识桥梁已建立', 'success', 3500);
+        }
+
+        async function deleteBookRelationship(id) {
+            if (!requireAuthenticatedUser() || !isEditing) return;
+            if (!confirm('确定删除这条知识桥梁吗？书籍和笔记不会受到影响。')) return;
+            const { error } = await supabaseClient.from('book_relationships')
+                .delete().eq('user_id', currentUser.id).eq('id', id);
+            if (error) {
+                showAIStatus('知识桥梁删除失败，请稍后重试', 'warning', 4500);
+                return;
+            }
+            await loadBookRelationships(currentUser);
+            const book = booksData.find(item => item.id === activeBookId);
+            if (book) renderBookRelationships(book);
             rebuildUniversePlanets();
         }
 
@@ -4844,6 +4993,28 @@ async function ensureReadingInsightConsent() {
                 cosmosCtx.font = '600 11px sans-serif';
                 cosmosCtx.textAlign = 'center';
                 cosmosCtx.fillText(`${galaxy.category}星系 · ${galaxy.count}`, galaxy.x, galaxy.y - haloRadius - 8);
+            });
+
+            const planetById = new Map(cosmosState.planets.map(planet => [planet.id, planet]));
+            bookRelationships.forEach(relationship => {
+                const source = planetById.get(relationship.sourceBookId);
+                const target = planetById.get(relationship.targetBookId);
+                if (!source || !target) return;
+                const sourceDrift = cosmosState.time * source.driftSpeed + source.driftPhase;
+                const targetDrift = cosmosState.time * target.driftSpeed + target.driftPhase;
+                const sourceX = source.x + Math.cos(sourceDrift) * 3;
+                const sourceY = source.y + Math.sin(sourceDrift) * 3;
+                const targetX = target.x + Math.cos(targetDrift) * 3;
+                const targetY = target.y + Math.sin(targetDrift) * 3;
+                cosmosCtx.save();
+                cosmosCtx.strokeStyle = `rgba(186, 230, 253, ${0.16 + Math.min(3, relationship.strength) * 0.1})`;
+                cosmosCtx.lineWidth = 0.6 + Math.min(3, relationship.strength) * 0.35;
+                cosmosCtx.setLineDash(relationship.type === 'contrasts' ? [5, 5] : []);
+                cosmosCtx.beginPath();
+                cosmosCtx.moveTo(sourceX, sourceY);
+                cosmosCtx.lineTo(targetX, targetY);
+                cosmosCtx.stroke();
+                cosmosCtx.restore();
             });
 
             // 绘制自发光量子星球
