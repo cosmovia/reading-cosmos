@@ -3631,7 +3631,9 @@ function getCategoryStyle(cat) {
             noteMethodSelect.disabled = !currentUser;
 
             document.getElementById('detail-cover-slot').innerHTML = createBookCover(book);
-            if (!book.isDemo && !book.coverUrl) void hydrateBookCover(book);
+            if (!book.isDemo && (!book.coverUrl || isLowResolutionGoogleBooksCover(book.coverUrl))) {
+                void hydrateBookCover(book);
+            }
             updateInteractiveStarsUI(book.rating || 0);
 
             document.getElementById('mod-summary-text').innerText = getBookSummaryText(book) || '暂无概要';
