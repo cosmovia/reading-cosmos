@@ -1725,6 +1725,8 @@
                     <div class="ai-service-meta" id="managed-ai-meta">正在检查当前模型与服务状态…</div>
                     <div class="ai-quota-grid" id="managed-ai-quota"></div>
                     <button type="button" class="ai-status-refresh" id="managed-ai-refresh" onclick="loadManagedAIStatus()">刷新状态</button>
+                    <button type="button" class="ai-status-refresh" id="managed-ai-probe" onclick="probeOpenRouterFallback()">测试备用路由</button>
+                    <div class="ai-service-meta" id="managed-ai-probe-result"></div>
                 </div>
                 <div class="form-group form-group-full"><label for="settings-overview-mode">书籍概要生成方式</label><select id="settings-overview-mode" class="form-input"><option value="managed">平台托管（推荐，缓存并跨设备同步）</option><option value="byok">个人 BYOK（仅替代书籍概要生成）</option></select></div>
                 <div class="form-group"><label for="settings-provider">个人 BYOK Provider</label><select id="settings-provider" class="form-input" onchange="updateAIProviderFields()"><option value="glm">智谱 GLM</option><option value="openai_compatible">OpenAI Compatible</option></select></div>
@@ -2109,9 +2111,30 @@ function formatGatewayError(detail) {
         GATEWAY_NOT_CONFIGURED: '平台 AI 服务尚未配置，请稍后再试或暂时使用个人 BYOK 概要',
         TIMEOUT: '模型响应超时，你的书籍和笔记已经保留，可以稍后重试',
         NETWORK: '暂时无法连接平台 AI 服务，请检查网络后重试',
-        UNAVAILABLE: '平台 AI 服务暂时不可用，你的内容已经保留，请稍后重试'
+        UNAVAILABLE: '平台 AI 服务暂时不可用，你的内容已经保留，请稍后重试',
+        PROBE_COOLDOWN: `备用路由刚刚验证过，请约 ${Math.max(1, Math.ceil(Number(detail?.retryAfterSeconds || 0) / 60))} 分钟后再试`
     };
     return messages[detail?.code] || detail?.message || 'AI 请求失败，请稍后重试';
+}
+
+async function probeOpenRouterFallback() {
+    const button = document.getElementById('managed-ai-probe');
+    const resultNode = document.getElementById('managed-ai-probe-result');
+    if (!button || !resultNode || !currentUser) return;
+    button.disabled = true;
+    resultNode.textContent = '正在发送不含用户数据的固定连通性请求…';
+    try {
+        const { data, error } = await supabaseClient.functions.invoke('ai-gateway', {
+            body: { taskType: 'provider_probe' }
+        });
+        if (error || data?.error) throw await getGatewayErrorDetail(error, data);
+        const probe = data?.probe || {};
+        resultNode.textContent = `备用路由验证成功：${probe.provider || 'openrouter'} · ${probe.model || '免费模型'} · ${Number(probe.attempts || 1)} 次尝试`;
+    } catch (detail) {
+        resultNode.textContent = formatGatewayError(detail);
+    } finally {
+        button.disabled = false;
+    }
 }
 
 async function loadManagedAIStatus() {

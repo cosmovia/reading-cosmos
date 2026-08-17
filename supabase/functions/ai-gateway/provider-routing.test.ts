@@ -176,6 +176,24 @@ Deno.test("recoverable overview failure records total attempts and the actual fa
   assert(result.fallbackIndex === 1, "successful fallback index is incorrect");
 });
 
+Deno.test("router records the model actually selected by an aggregated provider", async () => {
+  const result = await executeTaskProviderRoutes("book_overview", [{
+    provider: "openrouter",
+    model: "openrouter/free",
+    configured: true,
+    tasks: ["book_overview"],
+    execute: async () => ({
+      content: "ok",
+      attempts: 1,
+      resolvedModel: "example/free-model:free",
+    }),
+  }]);
+  assert(
+    result.model === "example/free-model:free",
+    "resolved OpenRouter model was not recorded",
+  );
+});
+
 Deno.test("non-recoverable provider failure stops routing", async () => {
   let fallbackCalls = 0;
   try {

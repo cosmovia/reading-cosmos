@@ -15,32 +15,52 @@ const PROMPT_VERSIONS: Record<TaskType, string> = {
 const PROVIDER = "zhipu";
 const DEFAULT_MODEL = "glm-4.7-flash";
 const GLM_ENDPOINT = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
+const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
+const OPENROUTER_DEFAULT_MODEL = "openrouter/free";
 const DAILY_GENERATION_LIMIT: Record<TaskType, number> = {
   book_overview: 10,
   note_assistance: 20,
   reading_insight: 3,
 };
 const REQUEST_TIMEOUT_MS = 55_000;
+const PROVIDER_PROBE_COOLDOWN_MS = 5 * 60_000;
 type ProviderRoute = {
   provider: string;
   apiKeyEnv: string;
   modelEnv: string;
   defaultModel: string;
   tasks: readonly TaskType[];
-  call: typeof callGlm;
+  call: (
+    apiKey: string,
+    model: string,
+    messages: Array<{ role: string; content: string }>,
+    webSearch?: boolean,
+  ) => Promise<ProviderCallOutput>;
 };
-const PROVIDER_ROUTES: ProviderRoute[] = [{
-  provider: PROVIDER,
-  apiKeyEnv: "GLM_API_KEY",
-  modelEnv: "GLM_MODEL",
-  defaultModel: DEFAULT_MODEL,
-  tasks: TASK_TYPES,
-  call: callGlm,
-}];
+const PROVIDER_ROUTES: ProviderRoute[] = [
+  {
+    provider: PROVIDER,
+    apiKeyEnv: "GLM_API_KEY",
+    modelEnv: "GLM_MODEL",
+    defaultModel: DEFAULT_MODEL,
+    tasks: TASK_TYPES,
+    call: callGlm,
+  },
+  {
+    provider: "openrouter",
+    apiKeyEnv: "OPENROUTER_API_KEY",
+    modelEnv: "OPENROUTER_MODEL",
+    defaultModel: OPENROUTER_DEFAULT_MODEL,
+    tasks: ["book_overview"],
+    call: callOpenRouter,
+  },
+];
 const NOTE_FIELDS = ["summary", "concepts", "thoughts", "actions"] as const;
 const NOTE_OPERATIONS = ["regenerate", "generate", "polish"] as const;
-type ProviderCallResult = Awaited<ReturnType<typeof callGlm>> & { attempts: number };
+type ProviderCallOutput = Awaited<ReturnType<typeof callGlm>> & { resolvedModel?: string };
+type ProviderCallResult = ProviderCallOutput & { attempts: number };
 const inFlightRequests = new Map<string, Promise<ProviderCallResult>>();
+const providerProbeTimes = new Map<string, number>();
 const providerCircuits = new ProviderCircuitRegistry();
 
 const corsHeaders = {
@@ -61,7 +81,7 @@ type GatewayBody = {
 
 type UsageStatus = { limit: number; used: number; remaining: number };
 
-type ProviderResult = Awaited<ReturnType<typeof callGlm>> & {
+type ProviderResult = ProviderCallOutput & {
   attempts: number;
   provider: string;
   model: string;
@@ -311,7 +331,7 @@ async function executeRouteWithReliability(
   model: string,
   messages: Array<{ role: string; content: string }>,
   webSearch = false,
-): Promise<Awaited<ReturnType<typeof callGlm>> & { attempts: number }> {
+): Promise<ProviderCallResult> {
   const providerCircuit = getProviderCircuit(route.provider);
   if (providerCircuit.openUntil > Date.now()) throw providerFailure("CIRCUIT_OPEN");
   const existing = inFlightRequests.get(key);
@@ -442,6 +462,61 @@ async function callGlm(
   }
 }
 
+async function callOpenRouter(
+  apiKey: string,
+  model: string,
+  messages: Array<{ role: string; content: string }>,
+  _webSearch = false,
+) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const fallbackMessages = [
+      {
+        role: "system",
+        content: "当前备用模型不保证具备实时联网检索能力。不得声称已经联网或引用未经核验的来源；只使用可靠的通用知识，无法确认的版本、情节或事实必须明确说明不确定。",
+      },
+      ...messages,
+    ];
+    const response = await fetch(OPENROUTER_ENDPOINT, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://cosmovia.github.io/reading-cosmos/",
+        "X-OpenRouter-Title": "Reading Cosmos",
+      },
+      body: JSON.stringify({
+        model,
+        messages: fallbackMessages,
+        temperature: 0.35,
+        max_tokens: 1_800,
+        stream: false,
+        provider: { allow_fallbacks: true },
+      }),
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
+    if (!response.ok) throw classifyProviderResponse(response, payload);
+
+    const choices = payload.choices as Array<{ message?: { content?: unknown } }> | undefined;
+    const content = choices?.[0]?.message?.content;
+    if (typeof content !== "string" || !content.trim()) {
+      throw providerFailure("INVALID_RESPONSE", response.status, true);
+    }
+    const usage = payload.usage as Record<string, unknown> | undefined;
+    return {
+      content: content.trim(),
+      sources: [],
+      inputTokens: Number(usage?.prompt_tokens ?? 0) || null,
+      outputTokens: Number(usage?.completion_tokens ?? 0) || null,
+      resolvedModel: String(payload.model ?? model),
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function buildTaskServiceStatus(
   taskType: TaskType,
   configuredRoutes: ProviderRoute[],
@@ -538,6 +613,57 @@ Deno.serve(async (req: Request) => {
       });
     } catch {
       return jsonResponse({ requestId, error: { code: "DATABASE", message: "暂时无法读取平台 AI 状态" } }, 500);
+    }
+  }
+  if (body.taskType === "provider_probe") {
+    const route = configuredRoutes.find((item) => item.provider === "openrouter");
+    if (!route) {
+      return jsonResponse({
+        requestId,
+        error: { code: "NOT_CONFIGURED", message: "OpenRouter 备用路由尚未配置" },
+      }, 503);
+    }
+    const previousProbeAt = providerProbeTimes.get(userData.user.id) ?? 0;
+    const retryAfterMs = previousProbeAt + PROVIDER_PROBE_COOLDOWN_MS - Date.now();
+    if (retryAfterMs > 0) {
+      return jsonResponse({
+        requestId,
+        error: {
+          code: "PROBE_COOLDOWN",
+          message: "备用路由刚刚验证过，请稍后再试",
+          retryAfterSeconds: Math.ceil(retryAfterMs / 1_000),
+        },
+      }, 429);
+    }
+    providerProbeTimes.set(userData.user.id, Date.now());
+    const apiKey = Deno.env.get(route.apiKeyEnv) ?? "";
+    const model = Deno.env.get(route.modelEnv) || route.defaultModel;
+    try {
+      const result = await executeRouteWithReliability(
+        `probe|${userData.user.id}|${route.provider}|${model}`,
+        route,
+        apiKey,
+        model,
+        [
+          { role: "system", content: "这是服务连通性检查。不得索取或推断用户信息。" },
+          { role: "user", content: "请只回复 READY。" },
+        ],
+      );
+      return jsonResponse({
+        requestId,
+        probe: {
+          status: "available",
+          provider: route.provider,
+          model: result.resolvedModel || model,
+          attempts: result.attempts,
+        },
+      });
+    } catch (rawError) {
+      const failure = normalizeProviderFailure(rawError);
+      return jsonResponse({
+        requestId,
+        error: { code: failure.code, message: safeErrorMessage(failure.code) },
+      }, failure.status || 503);
     }
   }
   if (!TASK_TYPES.includes(body.taskType as TaskType)) {

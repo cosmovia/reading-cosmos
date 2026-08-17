@@ -21,7 +21,7 @@ export type ExecutableProviderRoute<T> = {
   model: string;
   configured: boolean;
   tasks: readonly GatewayTaskType[];
-  execute: () => Promise<T & { attempts: number }>;
+  execute: () => Promise<T & { attempts: number; resolvedModel?: string }>;
 };
 
 export type ExecutedProviderRoute<T> = T & {
@@ -71,7 +71,7 @@ export async function executeTaskProviderRoutes<T>(
         ...result,
         attempts: totalAttempts,
         provider: route.provider,
-        model: route.model,
+        model: result.resolvedModel || route.model,
         fallbackIndex,
       };
     } catch (rawError) {
