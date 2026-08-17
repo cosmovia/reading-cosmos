@@ -16,6 +16,15 @@ export function normalizeBookMetadata(value: unknown): string {
     .replace(/[《》〈〉「」『』“”‘’\s\p{P}\p{S}]/gu, "");
 }
 
+export function buildBookSearchQueries(title: string, author: string): Array<{ title: string; author?: string }> {
+  const normalizedTitle = String(title ?? "").trim();
+  const normalizedAuthor = String(author ?? "").trim();
+  if (!normalizedTitle) return [];
+  return normalizedAuthor
+    ? [{ title: normalizedTitle, author: normalizedAuthor }, { title: normalizedTitle }]
+    : [{ title: normalizedTitle }];
+}
+
 export function safeBookCoverUrl(value: unknown): string {
   try {
     const url = new URL(String(value ?? "").replace(/^http:/i, "https:"));

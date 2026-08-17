@@ -5,6 +5,7 @@ import {
   ProviderCircuitRegistry,
 } from "./provider-routing.ts";
 import {
+  buildBookSearchQueries,
   safeBookCoverUrl,
   scoreBookMetadataCandidate,
 } from "./book-metadata.ts";
@@ -212,46 +213,52 @@ async function fetchBookMetadata(url: URL): Promise<Record<string, unknown>> {
 }
 
 async function findOpenLibraryCover(title: string, author: string): Promise<string> {
-  const url = new URL("https://openlibrary.org/search.json");
-  url.search = new URLSearchParams({
-    title,
-    author,
-    limit: "10",
-    fields: "title,author_name,cover_i",
-  }).toString();
-  const payload = await fetchBookMetadata(url);
-  const docs = Array.isArray(payload.docs) ? payload.docs as Array<Record<string, unknown>> : [];
-  const candidates = docs.map((item) => {
-    const coverId = Number(item.cover_i ?? 0);
-    const coverUrl = coverId > 0 ? `https://covers.openlibrary.org/b/id/${coverId}-L.jpg` : "";
-    return {
-      coverUrl,
-      score: scoreBookMetadataCandidate(title, author, item.title, item.author_name, coverUrl),
-    };
-  }).sort((a, b) => b.score - a.score);
-  return candidates[0]?.score >= 10 ? safeBookCoverUrl(candidates[0].coverUrl) : "";
+  for (const query of buildBookSearchQueries(title, author)) {
+    const url = new URL("https://openlibrary.org/search.json");
+    url.search = new URLSearchParams({
+      ...query,
+      limit: "10",
+      fields: "title,author_name,cover_i",
+    }).toString();
+    const payload = await fetchBookMetadata(url);
+    const docs = Array.isArray(payload.docs) ? payload.docs as Array<Record<string, unknown>> : [];
+    const candidates = docs.map((item) => {
+      const coverId = Number(item.cover_i ?? 0);
+      const coverUrl = coverId > 0 ? `https://covers.openlibrary.org/b/id/${coverId}-L.jpg` : "";
+      return {
+        coverUrl,
+        score: scoreBookMetadataCandidate(title, author, item.title, item.author_name, coverUrl),
+      };
+    }).sort((a, b) => b.score - a.score);
+    if (candidates[0]?.score >= 10) return safeBookCoverUrl(candidates[0].coverUrl);
+  }
+  return "";
 }
 
 async function findGoogleBooksCover(title: string, author: string): Promise<string> {
-  const url = new URL("https://www.googleapis.com/books/v1/volumes");
-  url.search = new URLSearchParams({
-    q: `intitle:${title} inauthor:${author}`,
-    maxResults: "10",
-    printType: "books",
-    projection: "lite",
-  }).toString();
-  const payload = await fetchBookMetadata(url);
-  const items = Array.isArray(payload.items) ? payload.items as Array<Record<string, unknown>> : [];
-  const candidates = items.map((item) => {
-    const info = item.volumeInfo as Record<string, unknown> | undefined;
-    const imageLinks = info?.imageLinks as Record<string, unknown> | undefined;
-    const coverUrl = safeBookCoverUrl(imageLinks?.thumbnail ?? imageLinks?.smallThumbnail);
-    return {
-      coverUrl,
-      score: scoreBookMetadataCandidate(title, author, info?.title, info?.authors, coverUrl),
-    };
-  }).sort((a, b) => b.score - a.score);
-  return candidates[0]?.score >= 10 ? candidates[0].coverUrl : "";
+  for (const query of buildBookSearchQueries(title, author)) {
+    const url = new URL("https://www.googleapis.com/books/v1/volumes");
+    const q = query.author ? `intitle:${query.title} inauthor:${query.author}` : `intitle:${query.title}`;
+    url.search = new URLSearchParams({
+      q,
+      maxResults: "10",
+      printType: "books",
+      projection: "lite",
+    }).toString();
+    const payload = await fetchBookMetadata(url);
+    const items = Array.isArray(payload.items) ? payload.items as Array<Record<string, unknown>> : [];
+    const candidates = items.map((item) => {
+      const info = item.volumeInfo as Record<string, unknown> | undefined;
+      const imageLinks = info?.imageLinks as Record<string, unknown> | undefined;
+      const coverUrl = safeBookCoverUrl(imageLinks?.thumbnail ?? imageLinks?.smallThumbnail);
+      return {
+        coverUrl,
+        score: scoreBookMetadataCandidate(title, author, info?.title, info?.authors, coverUrl),
+      };
+    }).sort((a, b) => b.score - a.score);
+    if (candidates[0]?.score >= 10) return candidates[0].coverUrl;
+  }
+  return "";
 }
 
 async function findBookCover(title: string, author: string): Promise<{ url: string; source: string } | null> {

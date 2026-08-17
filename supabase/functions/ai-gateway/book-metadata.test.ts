@@ -1,4 +1,5 @@
 import {
+  buildBookSearchQueries,
   normalizeBookMetadata,
   safeBookCoverUrl,
   scoreBookMetadataCandidate,
@@ -23,6 +24,13 @@ Deno.test("cover URLs are restricted to known HTTPS image hosts", () => {
   );
   assert(safeBookCoverUrl("https://example.com/cover.jpg") === "", "unknown cover host was accepted");
   assert(safeBookCoverUrl("javascript:alert(1)") === "", "unsafe cover protocol was accepted");
+});
+
+Deno.test("book search falls back from author-filtered to title-only lookup", () => {
+  const queries = buildBookSearchQueries("我看见的世界", "李飞飞");
+  assert(queries.length === 2, "title-only fallback was not created");
+  assert(queries[0].author === "李飞飞", "strict query lost its author");
+  assert(!queries[1].author && queries[1].title === "我看见的世界", "fallback query is incorrect");
 });
 
 Deno.test("exact title and author metadata clears the acceptance threshold", () => {
