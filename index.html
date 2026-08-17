@@ -462,6 +462,16 @@
             position: relative;
         }
 
+        .book-cover-image {
+            position: absolute;
+            inset: 0;
+            z-index: 2;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            background: #eef2f7;
+        }
+
         /* 艺术感封面 */
         .book-cover-fallback {
             width: 100%;
@@ -648,6 +658,7 @@
             overflow: hidden;
             box-shadow: 0 10px 25px rgba(15, 23, 42, 0.1);
             margin-bottom: 24px;
+            position: relative;
         }
 
         .detail-title {
@@ -1038,6 +1049,7 @@
             border-radius: 6px;
             overflow: hidden;
             flex-shrink: 0;
+            position: relative;
         }
 
         .popover-info {
@@ -2694,6 +2706,7 @@ async function syncBooksToSupabase() {
             concepts: book.concepts || '',
             thoughts: book.thoughts || '',
             actions: book.actions || '',
+            cover_url: book.coverUrl || '',
 
             timestamp: book.timestamp || Date.now(),
             note_method:
@@ -3276,7 +3289,80 @@ function getCategoryStyle(cat) {
     `;
 
 }
-        
+
+        function getSafeBookCoverUrl(value) {
+            try {
+                const url = new URL(String(value || '').replace(/^http:/i, 'https:'));
+                const allowedHosts = new Set([
+                    'books.google.com',
+                    'books.googleusercontent.com',
+                    'covers.openlibrary.org'
+                ]);
+                const isRegionalGoogleBooksHost = /^books\.google\.(?:[a-z]{2,3}|co\.[a-z]{2}|com\.[a-z]{2})$/i.test(url.hostname);
+                return url.protocol === 'https:' && (allowedHosts.has(url.hostname) || isRegionalGoogleBooksHost) ? url.toString() : '';
+            } catch {
+                return '';
+            }
+        }
+
+        function createBookCover(book) {
+            const fallback = createProceduralCover(book.title, book.author, book.category);
+            const coverUrl = getSafeBookCoverUrl(book.coverUrl);
+            if (!coverUrl) return fallback;
+            return `${fallback}<img class="book-cover-image" src="${escapeHTML(coverUrl)}" alt="${escapeHTML(book.title || '书籍')}封面" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">`;
+        }
+
+        function isLowResolutionGoogleBooksCover(value) {
+            const coverUrl = getSafeBookCoverUrl(value);
+            if (!coverUrl) return false;
+            const url = new URL(coverUrl);
+            const isGoogleBooksHost = url.hostname === 'books.google.com' || /^books\.google\.(?:[a-z]{2,3}|co\.[a-z]{2}|com\.[a-z]{2})$/i.test(url.hostname);
+            return isGoogleBooksHost && Number(url.searchParams.get('zoom') || '1') <= 1;
+        }
+
+        const attemptedBookCovers = new Set();
+
+        async function hydrateBookCover(book) {
+            if (!book || (getSafeBookCoverUrl(book.coverUrl) && !isLowResolutionGoogleBooksCover(book.coverUrl)) || attemptedBookCovers.has(book.id)) return false;
+            attemptedBookCovers.add(book.id);
+            if (!book.cloudId) await syncBooksToSupabase();
+            if (!book.cloudId) return false;
+            let data;
+            try {
+                const response = await supabaseClient.functions.invoke('ai-gateway', {
+                    body: { taskType: 'book_cover', bookId: book.cloudId }
+                });
+                data = response.data;
+                if (response.error || data?.error) throw await getGatewayErrorDetail(response.error, data);
+            } catch (error) {
+                console.warn('暂时无法自动获取书籍封面', error);
+                showAIStatus('封面服务暂时不可用，已保留当前艺术封面', 'warning', 5000);
+                return false;
+            }
+
+            const coverUrl = getSafeBookCoverUrl(data?.cover?.url);
+            if (!coverUrl) {
+                showAIStatus('未找到可信的书籍封面，已保留当前艺术封面', 'warning', 5000);
+                return false;
+            }
+
+            book.coverUrl = coverUrl;
+            try {
+                localStorage.setItem(
+                    `reading_cosmos_data_store:${currentUser.id}`,
+                    JSON.stringify(booksData.filter(item => !item.isDemo))
+                );
+            } catch (error) {
+                console.warn('封面已保存到云端，但本地缓存更新失败', error);
+            }
+            if (activeBookId === book.id) {
+                const detailCoverSlot = document.getElementById('detail-cover-slot');
+                if (detailCoverSlot) detailCoverSlot.innerHTML = createBookCover(book);
+            }
+            refreshApplicationData();
+            return true;
+        }
+
         // 书架渲染（包含悬浮编辑与删除按钮）
         function renderShelfView() {
             const container = document.getElementById('shelf-books-container');
@@ -3286,7 +3372,7 @@ function getCategoryStyle(cat) {
                 card.className = 'book-card';
                 card.onclick = () => openBookDetailPanel(book.id);
                 
-                const coverHtml = createProceduralCover(book.title, book.author, book.category);
+                const coverHtml = createBookCover(book);
                 const stars = '★'.repeat(book.rating || 0) + '☆'.repeat(5 - (book.rating || 0));
                 const cardActions = currentUser ? `
                     <div class="card-actions">
@@ -3370,6 +3456,7 @@ function getCategoryStyle(cat) {
                 noteMethod: normalizeNoteMethod(noteMethod, category),
                 notesRevision: 0,
                 aiData: {},
+                coverUrl: '',
                 summary: '',
                 concepts: '',
                 thoughts: '',
@@ -3380,7 +3467,11 @@ function getCategoryStyle(cat) {
             refreshApplicationData();
             closeAddBookModal();
             openBookDetailPanel(newBook.id);
-            await generateAutomaticBookSummary(newBook);
+            await syncBooksToSupabase();
+            await Promise.allSettled([
+                hydrateBookCover(newBook),
+                generateAutomaticBookSummary(newBook)
+            ]);
         }
 
         async function callManagedBookOverview(book, forceRefresh = false) {
@@ -3539,7 +3630,10 @@ function getCategoryStyle(cat) {
             noteMethodSelect.value = book.noteMethod;
             noteMethodSelect.disabled = !currentUser;
 
-            document.getElementById('detail-cover-slot').innerHTML = createProceduralCover(book.title, book.author, book.category);
+            document.getElementById('detail-cover-slot').innerHTML = createBookCover(book);
+            if (!book.isDemo && (!book.coverUrl || isLowResolutionGoogleBooksCover(book.coverUrl))) {
+                void hydrateBookCover(book);
+            }
             updateInteractiveStarsUI(book.rating || 0);
 
             document.getElementById('mod-summary-text').innerText = getBookSummaryText(book) || '暂无概要';
@@ -4292,7 +4386,8 @@ async function ensureReadingInsightConsent() {
             const tag = document.getElementById('pop-tag-slot');
             tag.innerText = planet.category; tag.style.color = planet.color;
             document.getElementById('pop-rating-slot').innerText = '★'.repeat(planet.rating) + '☆'.repeat(5 - planet.rating);
-            document.getElementById('pop-cover-slot').innerHTML = createProceduralCover(planet.title, planet.author, planet.category);
+            const popoverBook = booksData.find(book => book.id === planet.id);
+            document.getElementById('pop-cover-slot').innerHTML = createBookCover(popoverBook || planet);
 
             pop.style.left = `${cx - vRect.left}px`;
             pop.style.top = `${cy - vRect.top}px`;

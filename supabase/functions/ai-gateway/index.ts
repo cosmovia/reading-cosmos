@@ -4,6 +4,15 @@ import {
   executeTaskProviderRoutes,
   ProviderCircuitRegistry,
 } from "./provider-routing.ts";
+import {
+  buildBookSearchQueries,
+  buildGoogleBooksSearchParams,
+  isLowResolutionGoogleBooksCover,
+  safeBookCoverUrl,
+  selectGoogleBooksCover,
+  scoreBookMetadataCandidate,
+} from "./book-metadata.ts";
+import { isUsableProviderContent } from "./provider-content.ts";
 
 const TASK_TYPES = ["book_overview", "note_assistance", "reading_insight"] as const;
 type TaskType = typeof TASK_TYPES[number];
@@ -189,6 +198,79 @@ function normalizeProviderFailure(error: unknown): ProviderFailure {
 
 function normalizeMetadata(value: unknown): string {
   return String(value ?? "").normalize("NFKC").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+}
+
+async function fetchBookMetadata(url: URL): Promise<Record<string, unknown>> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 6_500);
+  try {
+    const response = await fetch(url, {
+      headers: { "User-Agent": "ReadingCosmos/1.0 (https://github.com/cosmovia/reading-cosmos)" },
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`BOOK_METADATA_HTTP_${response.status}`);
+    return await response.json() as Record<string, unknown>;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function findOpenLibraryCover(title: string, author: string): Promise<string> {
+  for (const query of buildBookSearchQueries(title, author)) {
+    const url = new URL("https://openlibrary.org/search.json");
+    url.search = new URLSearchParams({
+      ...query,
+      limit: "10",
+      fields: "title,author_name,cover_i",
+    }).toString();
+    const payload = await fetchBookMetadata(url);
+    const docs = Array.isArray(payload.docs) ? payload.docs as Array<Record<string, unknown>> : [];
+    const candidates = docs.map((item) => {
+      const coverId = Number(item.cover_i ?? 0);
+      const coverUrl = coverId > 0 ? `https://covers.openlibrary.org/b/id/${coverId}-L.jpg` : "";
+      return {
+        coverUrl,
+        score: scoreBookMetadataCandidate(title, author, item.title, item.author_name, coverUrl),
+      };
+    }).sort((a, b) => b.score - a.score);
+    if (candidates[0]?.score >= 10) return safeBookCoverUrl(candidates[0].coverUrl);
+  }
+  return "";
+}
+
+async function findGoogleBooksCover(title: string, author: string): Promise<string> {
+  const apiKey = Deno.env.get("GOOGLE_BOOKS_API_KEY")?.trim();
+  for (const query of buildBookSearchQueries(title, author)) {
+    const url = new URL("https://www.googleapis.com/books/v1/volumes");
+    url.search = buildGoogleBooksSearchParams(query, apiKey).toString();
+    const payload = await fetchBookMetadata(url);
+    const items = Array.isArray(payload.items) ? payload.items as Array<Record<string, unknown>> : [];
+    const candidates = items.map((item) => {
+      const info = item.volumeInfo as Record<string, unknown> | undefined;
+      const coverUrl = selectGoogleBooksCover(info?.imageLinks);
+      return {
+        coverUrl,
+        score: scoreBookMetadataCandidate(title, author, info?.title, info?.authors, coverUrl),
+      };
+    }).sort((a, b) => b.score - a.score);
+    if (candidates[0]?.score >= 10) return candidates[0].coverUrl;
+  }
+  return "";
+}
+
+async function findBookCover(title: string, author: string): Promise<{ url: string; source: string } | null> {
+  for (const source of [
+    { name: "openlibrary", lookup: findOpenLibraryCover },
+    { name: "google_books", lookup: findGoogleBooksCover },
+  ]) {
+    try {
+      const url = await source.lookup(title, author);
+      if (url) return { url, source: source.name };
+    } catch (error) {
+      console.warn(`book cover source failed: ${source.name}`, error);
+    }
+  }
+  return null;
 }
 
 async function sha256(value: string): Promise<string> {
@@ -466,7 +548,7 @@ async function callOpenRouter(
   apiKey: string,
   model: string,
   messages: Array<{ role: string; content: string }>,
-  _webSearch = false,
+  webSearch = false,
 ) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -477,6 +559,12 @@ async function callOpenRouter(
         content: "当前备用模型不保证具备实时联网检索能力。不得声称已经联网或引用未经核验的来源；只使用可靠的通用知识，无法确认的版本、情节或事实必须明确说明不确定。",
       },
       ...messages,
+      ...(webSearch
+        ? [{
+          role: "system",
+          content: "本次请求没有可用的搜索或函数工具。禁止输出思考过程、搜索指令、函数调用或任何 XML 标记；请直接输出完整的最终中文概要正文。",
+        }]
+        : []),
     ];
     const response = await fetch(OPENROUTER_ENDPOINT, {
       method: "POST",
@@ -501,7 +589,7 @@ async function callOpenRouter(
 
     const choices = payload.choices as Array<{ message?: { content?: unknown } }> | undefined;
     const content = choices?.[0]?.message?.content;
-    if (typeof content !== "string" || !content.trim()) {
+    if (!isUsableProviderContent(content, webSearch)) {
       throw providerFailure("INVALID_RESPONSE", response.status, true);
     }
     const usage = payload.usage as Record<string, unknown> | undefined;
@@ -665,6 +753,36 @@ Deno.serve(async (req: Request) => {
         error: { code: failure.code, message: safeErrorMessage(failure.code) },
       }, failure.status || 503);
     }
+  }
+  if (body.taskType === "book_cover") {
+    if (!body.bookId) {
+      return jsonResponse({ requestId, error: { code: "INVALID_REQUEST", message: "缺少书籍标识" } }, 400);
+    }
+    const { data: book, error: bookError } = await userClient
+      .from("books")
+      .select("id, title, author, cover_url")
+      .eq("id", body.bookId)
+      .maybeSingle();
+    if (bookError) {
+      return jsonResponse({ requestId, error: { code: "DATABASE", message: "暂时无法读取书籍" } }, 500);
+    }
+    if (!book) return jsonResponse({ requestId, error: { code: "NOT_FOUND", message: "未找到这本书" } }, 404);
+    const cachedUrl = safeBookCoverUrl(book.cover_url);
+    if (cachedUrl && !isLowResolutionGoogleBooksCover(cachedUrl)) {
+      return jsonResponse({ requestId, cover: { url: cachedUrl, source: "cache", cacheHit: true } });
+    }
+    const cover = await findBookCover(String(book.title ?? ""), String(book.author ?? ""));
+    if (!cover) {
+      return jsonResponse({ requestId, cover: { url: null, source: null, cacheHit: false } });
+    }
+    const { error: updateError } = await userClient
+      .from("books")
+      .update({ cover_url: cover.url, updated_at: new Date().toISOString() })
+      .eq("id", book.id);
+    if (updateError) {
+      return jsonResponse({ requestId, error: { code: "DATABASE", message: "暂时无法保存书籍封面" } }, 500);
+    }
+    return jsonResponse({ requestId, cover: { ...cover, cacheHit: false } });
   }
   if (!TASK_TYPES.includes(body.taskType as TaskType)) {
     return jsonResponse({ requestId, error: { code: "INVALID_REQUEST", message: "不支持的 AI 任务" } }, 400);
