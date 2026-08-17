@@ -462,6 +462,16 @@
             position: relative;
         }
 
+        .book-cover-image {
+            position: absolute;
+            inset: 0;
+            z-index: 2;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            background: #eef2f7;
+        }
+
         /* 艺术感封面 */
         .book-cover-fallback {
             width: 100%;
@@ -648,6 +658,7 @@
             overflow: hidden;
             box-shadow: 0 10px 25px rgba(15, 23, 42, 0.1);
             margin-bottom: 24px;
+            position: relative;
         }
 
         .detail-title {
@@ -1038,6 +1049,7 @@
             border-radius: 6px;
             overflow: hidden;
             flex-shrink: 0;
+            position: relative;
         }
 
         .popover-info {
@@ -2694,6 +2706,7 @@ async function syncBooksToSupabase() {
             concepts: book.concepts || '',
             thoughts: book.thoughts || '',
             actions: book.actions || '',
+            cover_url: book.coverUrl || '',
 
             timestamp: book.timestamp || Date.now(),
             note_method:
@@ -3276,7 +3289,55 @@ function getCategoryStyle(cat) {
     `;
 
 }
-        
+
+        function getSafeBookCoverUrl(value) {
+            try {
+                const url = new URL(String(value || '').replace(/^http:/i, 'https:'));
+                const allowedHosts = new Set([
+                    'books.google.com',
+                    'books.googleusercontent.com',
+                    'covers.openlibrary.org'
+                ]);
+                return url.protocol === 'https:' && allowedHosts.has(url.hostname) ? url.toString() : '';
+            } catch {
+                return '';
+            }
+        }
+
+        function createBookCover(book) {
+            const fallback = createProceduralCover(book.title, book.author, book.category);
+            const coverUrl = getSafeBookCoverUrl(book.coverUrl);
+            if (!coverUrl) return fallback;
+            return `${fallback}<img class="book-cover-image" src="${escapeHtml(coverUrl)}" alt="${escapeHtml(book.title || '书籍')}封面" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">`;
+        }
+
+        const attemptedBookCovers = new Set();
+
+        async function hydrateBookCover(book) {
+            if (!book || getSafeBookCoverUrl(book.coverUrl) || attemptedBookCovers.has(book.id)) return false;
+            attemptedBookCovers.add(book.id);
+            if (!book.cloudId) await syncBooksToSupabase();
+            if (!book.cloudId) return false;
+            try {
+                const { data, error } = await supabaseClient.functions.invoke('ai-gateway', {
+                    body: { taskType: 'book_cover', bookId: book.cloudId }
+                });
+                if (error || data?.error) throw await getGatewayErrorDetail(error, data);
+                const coverUrl = getSafeBookCoverUrl(data?.cover?.url);
+                if (!coverUrl) return false;
+                book.coverUrl = coverUrl;
+                await saveToLocalStorage();
+                if (activeBookId === book.id) {
+                    document.getElementById('detail-cover-slot').innerHTML = createBookCover(book);
+                }
+                refreshApplicationData();
+                return true;
+            } catch (error) {
+                console.warn('暂时无法自动获取书籍封面', error);
+                return false;
+            }
+        }
+
         // 书架渲染（包含悬浮编辑与删除按钮）
         function renderShelfView() {
             const container = document.getElementById('shelf-books-container');
@@ -3286,7 +3347,7 @@ function getCategoryStyle(cat) {
                 card.className = 'book-card';
                 card.onclick = () => openBookDetailPanel(book.id);
                 
-                const coverHtml = createProceduralCover(book.title, book.author, book.category);
+                const coverHtml = createBookCover(book);
                 const stars = '★'.repeat(book.rating || 0) + '☆'.repeat(5 - (book.rating || 0));
                 const cardActions = currentUser ? `
                     <div class="card-actions">
@@ -3370,6 +3431,7 @@ function getCategoryStyle(cat) {
                 noteMethod: normalizeNoteMethod(noteMethod, category),
                 notesRevision: 0,
                 aiData: {},
+                coverUrl: '',
                 summary: '',
                 concepts: '',
                 thoughts: '',
@@ -3380,7 +3442,11 @@ function getCategoryStyle(cat) {
             refreshApplicationData();
             closeAddBookModal();
             openBookDetailPanel(newBook.id);
-            await generateAutomaticBookSummary(newBook);
+            await syncBooksToSupabase();
+            await Promise.allSettled([
+                hydrateBookCover(newBook),
+                generateAutomaticBookSummary(newBook)
+            ]);
         }
 
         async function callManagedBookOverview(book, forceRefresh = false) {
@@ -3539,7 +3605,8 @@ function getCategoryStyle(cat) {
             noteMethodSelect.value = book.noteMethod;
             noteMethodSelect.disabled = !currentUser;
 
-            document.getElementById('detail-cover-slot').innerHTML = createProceduralCover(book.title, book.author, book.category);
+            document.getElementById('detail-cover-slot').innerHTML = createBookCover(book);
+            if (!book.isDemo && !book.coverUrl) void hydrateBookCover(book);
             updateInteractiveStarsUI(book.rating || 0);
 
             document.getElementById('mod-summary-text').innerText = getBookSummaryText(book) || '暂无概要';
@@ -4292,7 +4359,8 @@ async function ensureReadingInsightConsent() {
             const tag = document.getElementById('pop-tag-slot');
             tag.innerText = planet.category; tag.style.color = planet.color;
             document.getElementById('pop-rating-slot').innerText = '★'.repeat(planet.rating) + '☆'.repeat(5 - planet.rating);
-            document.getElementById('pop-cover-slot').innerHTML = createProceduralCover(planet.title, planet.author, planet.category);
+            const popoverBook = booksData.find(book => book.id === planet.id);
+            document.getElementById('pop-cover-slot').innerHTML = createBookCover(popoverBook || planet);
 
             pop.style.left = `${cx - vRect.left}px`;
             pop.style.top = `${cy - vRect.top}px`;
