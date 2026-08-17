@@ -44,15 +44,15 @@ Deno.test("Google Books search identifies the server project when a key is confi
   assert(!anonymousParams.has("key"), "empty API key was included");
 });
 
-Deno.test("Google Books cover selection prefers high resolution and upgrades thumbnails", () => {
+Deno.test("Google Books cover selection prefers only explicitly available high resolution links", () => {
   const medium = "https://books.google.com/books/content?id=1&zoom=3";
   const selected = selectGoogleBooksCover({
     thumbnail: "https://books.google.com/books/content?id=1&zoom=1",
     medium,
   });
   assert(selected === medium, "medium cover was not preferred over thumbnail");
-  const upgraded = selectGoogleBooksCover({ thumbnail: "https://books.google.com/books/content?id=1&zoom=1" });
-  assert(new URL(upgraded).searchParams.get("zoom") === "2", "thumbnail was not upgraded");
+  const thumbnail = "https://books.google.com/books/content?id=1&zoom=1";
+  assert(selectGoogleBooksCover({ thumbnail }) === thumbnail, "thumbnail URL was modified speculatively");
   assert(isLowResolutionGoogleBooksCover("https://books.google.com/books/content?id=1&zoom=1"), "low resolution cache was not detected");
   assert(!isLowResolutionGoogleBooksCover(medium), "high resolution cover was marked as low resolution");
 });

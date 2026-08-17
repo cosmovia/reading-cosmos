@@ -66,11 +66,6 @@ export function selectGoogleBooksCover(imageLinks: unknown): string {
   for (const size of ["extraLarge", "large", "medium", "small", "thumbnail", "smallThumbnail"]) {
     const coverUrl = safeBookCoverUrl(links[size]);
     if (!coverUrl) continue;
-    if (size === "thumbnail" || size === "smallThumbnail") {
-      const url = new URL(coverUrl);
-      if (isGoogleBooksHost(url.hostname)) url.searchParams.set("zoom", "2");
-      return url.toString();
-    }
     return coverUrl;
   }
   return "";
