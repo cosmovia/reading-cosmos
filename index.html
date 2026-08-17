@@ -3319,28 +3319,40 @@ function getCategoryStyle(cat) {
             attemptedBookCovers.add(book.id);
             if (!book.cloudId) await syncBooksToSupabase();
             if (!book.cloudId) return false;
+            let data;
             try {
-                const { data, error } = await supabaseClient.functions.invoke('ai-gateway', {
+                const response = await supabaseClient.functions.invoke('ai-gateway', {
                     body: { taskType: 'book_cover', bookId: book.cloudId }
                 });
-                if (error || data?.error) throw await getGatewayErrorDetail(error, data);
-                const coverUrl = getSafeBookCoverUrl(data?.cover?.url);
-                if (!coverUrl) {
-                    showAIStatus('未找到可信的书籍封面，已保留当前艺术封面', 'warning', 5000);
-                    return false;
-                }
-                book.coverUrl = coverUrl;
-                await saveToLocalStorage();
-                if (activeBookId === book.id) {
-                    document.getElementById('detail-cover-slot').innerHTML = createBookCover(book);
-                }
-                refreshApplicationData();
-                return true;
+                data = response.data;
+                if (response.error || data?.error) throw await getGatewayErrorDetail(response.error, data);
             } catch (error) {
                 console.warn('暂时无法自动获取书籍封面', error);
                 showAIStatus('封面服务暂时不可用，已保留当前艺术封面', 'warning', 5000);
                 return false;
             }
+
+            const coverUrl = getSafeBookCoverUrl(data?.cover?.url);
+            if (!coverUrl) {
+                showAIStatus('未找到可信的书籍封面，已保留当前艺术封面', 'warning', 5000);
+                return false;
+            }
+
+            book.coverUrl = coverUrl;
+            try {
+                localStorage.setItem(
+                    `reading_cosmos_data_store:${currentUser.id}`,
+                    JSON.stringify(booksData.filter(item => !item.isDemo))
+                );
+            } catch (error) {
+                console.warn('封面已保存到云端，但本地缓存更新失败', error);
+            }
+            if (activeBookId === book.id) {
+                const detailCoverSlot = document.getElementById('detail-cover-slot');
+                if (detailCoverSlot) detailCoverSlot.innerHTML = createBookCover(book);
+            }
+            refreshApplicationData();
+            return true;
         }
 
         // 书架渲染（包含悬浮编辑与删除按钮）
