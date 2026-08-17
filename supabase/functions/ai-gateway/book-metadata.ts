@@ -53,6 +53,29 @@ export function safeBookCoverUrl(value: unknown): string {
   }
 }
 
+export function isLowResolutionGoogleBooksCover(value: unknown): boolean {
+  const safeUrl = safeBookCoverUrl(value);
+  if (!safeUrl) return false;
+  const url = new URL(safeUrl);
+  return isGoogleBooksHost(url.hostname) && Number(url.searchParams.get("zoom") ?? "1") <= 1;
+}
+
+export function selectGoogleBooksCover(imageLinks: unknown): string {
+  if (!imageLinks || typeof imageLinks !== "object") return "";
+  const links = imageLinks as Record<string, unknown>;
+  for (const size of ["extraLarge", "large", "medium", "small", "thumbnail", "smallThumbnail"]) {
+    const coverUrl = safeBookCoverUrl(links[size]);
+    if (!coverUrl) continue;
+    if (size === "thumbnail" || size === "smallThumbnail") {
+      const url = new URL(coverUrl);
+      if (isGoogleBooksHost(url.hostname)) url.searchParams.set("zoom", "2");
+      return url.toString();
+    }
+    return coverUrl;
+  }
+  return "";
+}
+
 export function scoreBookMetadataCandidate(
   title: string,
   author: string,

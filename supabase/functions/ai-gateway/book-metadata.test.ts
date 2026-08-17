@@ -1,8 +1,10 @@
 import {
   buildBookSearchQueries,
   buildGoogleBooksSearchParams,
+  isLowResolutionGoogleBooksCover,
   normalizeBookMetadata,
   safeBookCoverUrl,
+  selectGoogleBooksCover,
   scoreBookMetadataCandidate,
 } from "./book-metadata.ts";
 
@@ -40,6 +42,19 @@ Deno.test("Google Books search identifies the server project when a key is confi
   assert(params.get("key") === "server-key", "configured API key was not included");
   const anonymousParams = buildGoogleBooksSearchParams({ title: "三体" });
   assert(!anonymousParams.has("key"), "empty API key was included");
+});
+
+Deno.test("Google Books cover selection prefers high resolution and upgrades thumbnails", () => {
+  const medium = "https://books.google.com/books/content?id=1&zoom=3";
+  const selected = selectGoogleBooksCover({
+    thumbnail: "https://books.google.com/books/content?id=1&zoom=1",
+    medium,
+  });
+  assert(selected === medium, "medium cover was not preferred over thumbnail");
+  const upgraded = selectGoogleBooksCover({ thumbnail: "https://books.google.com/books/content?id=1&zoom=1" });
+  assert(new URL(upgraded).searchParams.get("zoom") === "2", "thumbnail was not upgraded");
+  assert(isLowResolutionGoogleBooksCover("https://books.google.com/books/content?id=1&zoom=1"), "low resolution cache was not detected");
+  assert(!isLowResolutionGoogleBooksCover(medium), "high resolution cover was marked as low resolution");
 });
 
 Deno.test("exact title and author metadata clears the acceptance threshold", () => {

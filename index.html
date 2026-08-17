@@ -3312,10 +3312,18 @@ function getCategoryStyle(cat) {
             return `${fallback}<img class="book-cover-image" src="${escapeHTML(coverUrl)}" alt="${escapeHTML(book.title || '书籍')}封面" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">`;
         }
 
+        function isLowResolutionGoogleBooksCover(value) {
+            const coverUrl = getSafeBookCoverUrl(value);
+            if (!coverUrl) return false;
+            const url = new URL(coverUrl);
+            const isGoogleBooksHost = url.hostname === 'books.google.com' || /^books\.google\.(?:[a-z]{2,3}|co\.[a-z]{2}|com\.[a-z]{2})$/i.test(url.hostname);
+            return isGoogleBooksHost && Number(url.searchParams.get('zoom') || '1') <= 1;
+        }
+
         const attemptedBookCovers = new Set();
 
         async function hydrateBookCover(book) {
-            if (!book || getSafeBookCoverUrl(book.coverUrl) || attemptedBookCovers.has(book.id)) return false;
+            if (!book || (getSafeBookCoverUrl(book.coverUrl) && !isLowResolutionGoogleBooksCover(book.coverUrl)) || attemptedBookCovers.has(book.id)) return false;
             attemptedBookCovers.add(book.id);
             if (!book.cloudId) await syncBooksToSupabase();
             if (!book.cloudId) return false;

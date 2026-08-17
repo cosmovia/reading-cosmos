@@ -7,7 +7,9 @@ import {
 import {
   buildBookSearchQueries,
   buildGoogleBooksSearchParams,
+  isLowResolutionGoogleBooksCover,
   safeBookCoverUrl,
+  selectGoogleBooksCover,
   scoreBookMetadataCandidate,
 } from "./book-metadata.ts";
 import { isUsableProviderContent } from "./provider-content.ts";
@@ -245,8 +247,7 @@ async function findGoogleBooksCover(title: string, author: string): Promise<stri
     const items = Array.isArray(payload.items) ? payload.items as Array<Record<string, unknown>> : [];
     const candidates = items.map((item) => {
       const info = item.volumeInfo as Record<string, unknown> | undefined;
-      const imageLinks = info?.imageLinks as Record<string, unknown> | undefined;
-      const coverUrl = safeBookCoverUrl(imageLinks?.thumbnail ?? imageLinks?.smallThumbnail);
+      const coverUrl = selectGoogleBooksCover(info?.imageLinks);
       return {
         coverUrl,
         score: scoreBookMetadataCandidate(title, author, info?.title, info?.authors, coverUrl),
@@ -767,7 +768,7 @@ Deno.serve(async (req: Request) => {
     }
     if (!book) return jsonResponse({ requestId, error: { code: "NOT_FOUND", message: "未找到这本书" } }, 404);
     const cachedUrl = safeBookCoverUrl(book.cover_url);
-    if (cachedUrl) {
+    if (cachedUrl && !isLowResolutionGoogleBooksCover(cachedUrl)) {
       return jsonResponse({ requestId, cover: { url: cachedUrl, source: "cache", cacheHit: true } });
     }
     const cover = await findBookCover(String(book.title ?? ""), String(book.author ?? ""));
