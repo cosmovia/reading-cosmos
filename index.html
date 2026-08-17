@@ -4275,6 +4275,7 @@ function getCategoryStyle(cat) {
             }
 
             if (book) {
+                renderBookRelationships(book);
                 ['summary', 'concepts', 'thoughts', 'actions'].forEach(field => {
                     renderAIOutput(field, getTransientNoteSuggestion(book.id, field), book.notesRevision);
                 });
@@ -4420,7 +4421,7 @@ function getCategoryStyle(cat) {
                 const strength = '●'.repeat(Math.max(1, Math.min(3, item.strength)));
                 return `<div class="bridge-item">
                     <div class="bridge-item-main"><strong>${escapeHTML(normalizeBookTitle(otherBook?.title || '未知书籍'))}</strong> · ${escapeHTML(RELATIONSHIP_LABELS[item.type] || '思想联系')} · ${strength}${item.note ? `<br>${escapeHTML(item.note)}` : ''}</div>
-                    ${currentUser ? `<button class="bridge-delete" type="button" onclick="deleteBookRelationship('${escapeHTML(item.id)}')" aria-label="删除知识桥梁">✕</button>` : ''}
+                    ${currentUser && isEditing ? `<button class="bridge-delete" type="button" onclick="deleteBookRelationship('${escapeHTML(item.id)}')" aria-label="删除知识桥梁">✕</button>` : ''}
                 </div>`;
             }).join('');
         }
@@ -4457,7 +4458,8 @@ function getCategoryStyle(cat) {
         }
 
         async function deleteBookRelationship(id) {
-            if (!requireAuthenticatedUser()) return;
+            if (!requireAuthenticatedUser() || !isEditing) return;
+            if (!confirm('确定删除这条知识桥梁吗？书籍和笔记不会受到影响。')) return;
             const { error } = await supabaseClient.from('book_relationships')
                 .delete().eq('user_id', currentUser.id).eq('id', id);
             if (error) {
