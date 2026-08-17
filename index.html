@@ -263,6 +263,9 @@
         .settings-section-title { grid-column:1 / -1; margin:5px 0 12px; padding-top:12px; border-top:1px solid #e2e8f0; color:#0f172a; font-size:.86rem; font-weight:750; }
         .settings-section-title:first-child { padding-top:0; border-top:0; }
         .sync-summary { grid-column:1 / -1; padding:12px 14px; border:1px solid #dbeafe; border-radius:10px; background:#f8fbff; color:#475569; font-size:.8rem; line-height:1.55; }
+        .data-export-actions { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
+        .data-export-btn { border:0; border-radius:9px; padding:8px 11px; background:#e0edff; color:#1d4ed8; font:inherit; font-size:.76rem; font-weight:700; cursor:pointer; }
+        .data-export-btn:hover { background:#d5e6ff; }
         @media (max-width:600px) { .account-reader-title { display:none; } .user-toolbar { gap:4px; } .toolbar-btn { padding:6px 7px; } .settings-section-title, .sync-summary { grid-column:auto; } }
 
         /* Nav Tab Pill */
@@ -1789,12 +1792,14 @@
         </button>
 
         <button
-            class="report-btn">
+            class="report-btn"
+            onclick="exportReadingReport()">
             📄 导出报告
         </button>
 
         <button
-            class="report-btn">
+            class="report-btn"
+            onclick="shareReadingReport()">
             🔗 分享
         </button>
 
@@ -1874,7 +1879,12 @@
                 <div class="form-group form-group-full"><label for="settings-base-url">Chat Completions 地址</label><input type="url" id="settings-base-url" class="form-input" placeholder="https://open.bigmodel.cn/api/paas/v4/chat/completions"></div>
                 <div class="form-group form-group-full"><label for="settings-api-key">API Key</label><input type="password" id="settings-api-key" class="form-input" autocomplete="off" placeholder="仅保存在当前浏览器"></div>
                 <div class="settings-section-title" id="settings-sync-section">数据与同步</div>
-                <div class="sync-summary">书籍、评分、笔记与已缓存的阅读洞察会同步到当前账号。个人 API Key 只保存在本浏览器，不参与云同步。导出、备份恢复与账号数据删除将在数据资产批次中提供。</div>
+                <div class="sync-summary">
+                    书籍、评分、笔记与已缓存的阅读洞察会同步到当前账号。个人 API Key 只保存在本浏览器，不参与云同步。备份文件不会包含 API Key；恢复与账号数据删除将在后续数据资产批次提供。
+                    <div class="data-export-actions">
+                        <button type="button" class="data-export-btn" onclick="exportReadingCosmosBackup()">导出个人数据备份</button>
+                    </div>
+                </div>
             </div>
             <div class="settings-security-note">平台 Gateway 用于书籍概要、笔记思考建议和阅读洞察；笔记建议正文只在当前编辑会话显示，阅读洞察经单独确认后跨设备保存。个人 BYOK 目前仅用于可选的概要生成，API Key 只保存在当前浏览器，不上传 Supabase。当前平台只启用 GLM，尚未启用跨服务商自动切换。</div>
             <div class="settings-status" id="settings-status" role="status"></div>
@@ -2334,6 +2344,135 @@ async function loadManagedAIStatus() {
 
 function closeSettings() { document.getElementById('settings-modal').classList.remove('active'); }
 function handleSettingsOutsideClick(event) { if (event.target.id === 'settings-modal') closeSettings(); }
+
+function getExportDateStamp() {
+    return new Date().toISOString().slice(0, 10);
+}
+
+function downloadTextFile(filename, content, mimeType) {
+    const blob = new Blob([content], { type: `${mimeType};charset=utf-8` });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function serializeBookForBackup(book) {
+    return {
+        sourceBookId: String(book.id || ''),
+        title: String(book.title || ''),
+        author: String(book.author || ''),
+        category: String(book.category || '未分类'),
+        rating: Number(book.rating || 0),
+        addedAt: new Date(Number(book.timestamp || Date.now())).toISOString(),
+        coverUrl: getSafeBookCoverUrl(book.coverUrl) || (book.coverUrl === ARTWORK_COVER_SENTINEL ? ARTWORK_COVER_SENTINEL : ''),
+        noteMethod: normalizeNoteMethod(book.noteMethod, book.category),
+        notesRevision: Number(book.notesRevision || 0),
+        summary: String(getBookSummaryText(book) || ''),
+        notes: {
+            concepts: String(book.concepts || ''),
+            thoughts: String(book.thoughts || ''),
+            actions: String(book.actions || '')
+        },
+        aiData: sanitizeBookAIData(book.aiData)
+    };
+}
+
+function exportReadingCosmosBackup() {
+    if (!requireAuthenticatedUser()) return;
+    const realBooks = booksData.filter(book => !book.isDemo);
+    const payload = {
+        format: 'reading-cosmos-backup',
+        schemaVersion: 1,
+        exportedAt: new Date().toISOString(),
+        reader: {
+            displayName: String(currentUser?.user_metadata?.display_name || currentUser?.email?.split('@')[0] || ''),
+            title: getReaderTitle(realBooks.length)
+        },
+        books: realBooks.map(serializeBookForBackup),
+        readingInsight: managedReadingInsight || null,
+        privacy: {
+            apiKeysIncluded: false,
+            transientAISuggestionsIncluded: false
+        }
+    };
+    downloadTextFile(
+        `reading-cosmos-backup-${getExportDateStamp()}.json`,
+        JSON.stringify(payload, null, 2),
+        'application/json'
+    );
+    setSettingsStatus(`已导出 ${realBooks.length} 本书的数据备份，不包含 API Key。`);
+}
+
+function buildReadingReportText() {
+    const realBooks = booksData.filter(book => !book.isDemo);
+    const categoryCounts = realBooks.reduce((counts, book) => {
+        const category = book.category || '未分类';
+        counts[category] = (counts[category] || 0) + 1;
+        return counts;
+    }, {});
+    const leadingCategory = Object.entries(categoryCounts).sort((a, b) => b[1] - a[1])[0];
+    const averageRating = realBooks.length
+        ? (realBooks.reduce((sum, book) => sum + Number(book.rating || 0), 0) / realBooks.length).toFixed(1)
+        : '0.0';
+    const categories = Object.entries(categoryCounts)
+        .sort((a, b) => b[1] - a[1])
+        .map(([category, count]) => `- ${category}：${count} 本`)
+        .join('\n') || '- 暂无阅读数据';
+    const recentBooks = [...realBooks]
+        .sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0))
+        .slice(0, 10)
+        .map(book => `- 《${normalizeBookTitle(book.title)}》 / ${book.author || '作者未知'} / ${book.rating || 0} 星`)
+        .join('\n') || '- 暂无阅读数据';
+
+    return [
+        'Reading Cosmos 阅读报告',
+        `生成时间：${new Date().toLocaleString('zh-CN')}`,
+        '',
+        `已探索书籍：${realBooks.length} 本`,
+        `阅读称号：${getReaderTitle(realBooks.length)}`,
+        `平均评分：${averageRating} / 5`,
+        `主导星系：${leadingCategory ? `${leadingCategory[0]}（${leadingCategory[1]} 本）` : '尚未形成'}`,
+        '',
+        '星系构成',
+        categories,
+        '',
+        '最近阅读',
+        recentBooks,
+        '',
+        '—— 我的阅读宇宙 Reading Cosmos'
+    ].join('\n');
+}
+
+function exportReadingReport() {
+    if (!requireAuthenticatedUser()) return;
+    downloadTextFile(
+        `reading-cosmos-report-${getExportDateStamp()}.txt`,
+        `\uFEFF${buildReadingReportText()}`,
+        'text/plain'
+    );
+    showAIStatus('阅读报告已导出到本地', 'success', 3500);
+}
+
+async function shareReadingReport() {
+    if (!requireAuthenticatedUser()) return;
+    const text = buildReadingReportText();
+    try {
+        if (navigator.share) {
+            await navigator.share({ title: 'Reading Cosmos 阅读报告', text });
+            return;
+        }
+        await navigator.clipboard.writeText(text);
+        showAIStatus('当前浏览器不支持系统分享，报告已复制到剪贴板', 'success', 4500);
+    } catch (error) {
+        if (error?.name === 'AbortError') return;
+        showAIStatus('分享未完成，请使用“导出报告”保存到本地', 'warning', 4500);
+    }
+}
 
 async function saveSettings() {
     if (!currentUser) return;
