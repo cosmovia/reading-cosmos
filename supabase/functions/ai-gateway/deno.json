@@ -1,6 +1,6 @@
 {
   "tasks": {
-    "test": "deno test provider-routing.test.ts book-metadata.test.ts"
+    "test": "deno test provider-routing.test.ts book-metadata.test.ts provider-content.test.ts"
   },
   "imports": {
     "@supabase/supabase-js": "npm:@supabase/supabase-js@2.95.0"

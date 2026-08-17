@@ -8,6 +8,7 @@ import {
   safeBookCoverUrl,
   scoreBookMetadataCandidate,
 } from "./book-metadata.ts";
+import { isUsableProviderContent } from "./provider-content.ts";
 
 const TASK_TYPES = ["book_overview", "note_assistance", "reading_insight"] as const;
 type TaskType = typeof TASK_TYPES[number];
@@ -543,7 +544,7 @@ async function callOpenRouter(
   apiKey: string,
   model: string,
   messages: Array<{ role: string; content: string }>,
-  _webSearch = false,
+  webSearch = false,
 ) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -554,6 +555,12 @@ async function callOpenRouter(
         content: "当前备用模型不保证具备实时联网检索能力。不得声称已经联网或引用未经核验的来源；只使用可靠的通用知识，无法确认的版本、情节或事实必须明确说明不确定。",
       },
       ...messages,
+      ...(webSearch
+        ? [{
+          role: "system",
+          content: "本次请求没有可用的搜索或函数工具。禁止输出思考过程、搜索指令、函数调用或任何 XML 标记；请直接输出完整的最终中文概要正文。",
+        }]
+        : []),
     ];
     const response = await fetch(OPENROUTER_ENDPOINT, {
       method: "POST",
@@ -578,7 +585,7 @@ async function callOpenRouter(
 
     const choices = payload.choices as Array<{ message?: { content?: unknown } }> | undefined;
     const content = choices?.[0]?.message?.content;
-    if (typeof content !== "string" || !content.trim()) {
+    if (!isUsableProviderContent(content, webSearch)) {
       throw providerFailure("INVALID_RESPONSE", response.status, true);
     }
     const usage = payload.usage as Record<string, unknown> | undefined;

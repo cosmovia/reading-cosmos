@@ -17,6 +17,10 @@ Deno.test("cover URLs are restricted to known HTTPS image hosts", () => {
     safeBookCoverUrl("http://books.google.com/books/content?id=1").startsWith("https://"),
     "known HTTP cover was not upgraded",
   );
+  assert(
+    safeBookCoverUrl("https://books.google.co.kr/books/content?id=1").startsWith("https://"),
+    "regional Google Books cover was rejected",
+  );
   assert(safeBookCoverUrl("https://example.com/cover.jpg") === "", "unknown cover host was accepted");
   assert(safeBookCoverUrl("javascript:alert(1)") === "", "unsafe cover protocol was accepted");
 });

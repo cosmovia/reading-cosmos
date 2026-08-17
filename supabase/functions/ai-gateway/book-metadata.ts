@@ -4,6 +4,11 @@ const COVER_HOSTS = new Set([
   "covers.openlibrary.org",
 ]);
 
+function isGoogleBooksHost(hostname: string): boolean {
+  return hostname === "books.google.com" ||
+    /^books\.google\.(?:[a-z]{2,3}|co\.[a-z]{2}|com\.[a-z]{2})$/i.test(hostname);
+}
+
 export function normalizeBookMetadata(value: unknown): string {
   return String(value ?? "")
     .normalize("NFKC")
@@ -14,7 +19,10 @@ export function normalizeBookMetadata(value: unknown): string {
 export function safeBookCoverUrl(value: unknown): string {
   try {
     const url = new URL(String(value ?? "").replace(/^http:/i, "https:"));
-    return url.protocol === "https:" && COVER_HOSTS.has(url.hostname) ? url.toString() : "";
+    return url.protocol === "https:" &&
+        (COVER_HOSTS.has(url.hostname) || isGoogleBooksHost(url.hostname))
+      ? url.toString()
+      : "";
   } catch {
     return "";
   }

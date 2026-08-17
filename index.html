@@ -3298,7 +3298,8 @@ function getCategoryStyle(cat) {
                     'books.googleusercontent.com',
                     'covers.openlibrary.org'
                 ]);
-                return url.protocol === 'https:' && allowedHosts.has(url.hostname) ? url.toString() : '';
+                const isRegionalGoogleBooksHost = /^books\.google\.(?:[a-z]{2,3}|co\.[a-z]{2}|com\.[a-z]{2})$/i.test(url.hostname);
+                return url.protocol === 'https:' && (allowedHosts.has(url.hostname) || isRegionalGoogleBooksHost) ? url.toString() : '';
             } catch {
                 return '';
             }
@@ -3324,7 +3325,10 @@ function getCategoryStyle(cat) {
                 });
                 if (error || data?.error) throw await getGatewayErrorDetail(error, data);
                 const coverUrl = getSafeBookCoverUrl(data?.cover?.url);
-                if (!coverUrl) return false;
+                if (!coverUrl) {
+                    showAIStatus('未找到可信的书籍封面，已保留当前艺术封面', 'warning', 5000);
+                    return false;
+                }
                 book.coverUrl = coverUrl;
                 await saveToLocalStorage();
                 if (activeBookId === book.id) {
@@ -3334,6 +3338,7 @@ function getCategoryStyle(cat) {
                 return true;
             } catch (error) {
                 console.warn('暂时无法自动获取书籍封面', error);
+                showAIStatus('封面服务暂时不可用，已保留当前艺术封面', 'warning', 5000);
                 return false;
             }
         }
