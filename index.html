@@ -404,6 +404,116 @@
 
 }
 
+        .shelf-search-shell {
+            flex: 1 1 320px;
+            max-width: 520px;
+            min-width: min(100%, 240px);
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+
+        .shelf-search-input {
+            width: 100%;
+            border: 1px solid rgba(71, 85, 105, 0.16);
+            border-radius: 16px;
+            background: rgba(255, 255, 255, 0.78);
+            color: #0f172a;
+            padding: 12px 76px 12px 42px;
+            font: inherit;
+            outline: none;
+            box-shadow: 0 8px 24px rgba(59, 130, 246, 0.06);
+            transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+        }
+
+        .shelf-search-input:focus {
+            border-color: rgba(37, 99, 235, 0.45);
+            background: #fff;
+            box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.1);
+        }
+
+        .shelf-search-icon {
+            position: absolute;
+            left: 15px;
+            color: #64748b;
+            pointer-events: none;
+        }
+
+        .shelf-search-clear {
+            position: absolute;
+            right: 10px;
+            border: 0;
+            border-radius: 10px;
+            background: transparent;
+            color: #64748b;
+            padding: 6px 9px;
+            cursor: pointer;
+            display: none;
+        }
+
+        .shelf-search-clear.visible { display: block; }
+
+        .shelf-search-empty {
+            grid-column: 1 / -1;
+            padding: 72px 24px;
+            border: 1px dashed rgba(71, 85, 105, 0.22);
+            border-radius: 24px;
+            background: rgba(255, 255, 255, 0.5);
+            text-align: center;
+            color: #64748b;
+        }
+
+        .shelf-search-empty strong {
+            display: block;
+            margin-bottom: 8px;
+            color: #334155;
+            font-size: 1.05rem;
+        }
+
+        .cover-edit-panel {
+            display: none;
+            width: 100%;
+            margin-top: 14px;
+            gap: 8px;
+            flex-direction: column;
+        }
+
+        .cover-edit-panel.active { display: flex; }
+
+        .cover-url-input {
+            width: 100%;
+            box-sizing: border-box;
+            border: 1px solid #dbe3ef;
+            border-radius: 10px;
+            padding: 9px 10px;
+            background: rgba(255,255,255,0.9);
+            color: #334155;
+            font: inherit;
+            font-size: 0.78rem;
+        }
+
+        .cover-edit-actions { display: flex; gap: 7px; flex-wrap: wrap; }
+
+        .cover-edit-btn {
+            flex: 1 1 auto;
+            border: 0;
+            border-radius: 9px;
+            padding: 8px 9px;
+            background: #e8eef8;
+            color: #40516a;
+            cursor: pointer;
+            font-size: 0.74rem;
+        }
+
+        .cover-edit-btn.primary { background: #111827; color: white; }
+
+        .cover-edit-status {
+            min-height: 1.2em;
+            color: #64748b;
+            font-size: 0.72rem;
+            line-height: 1.45;
+        }
+
         .book-card {
             background: transparent;
             cursor: pointer;
@@ -1494,6 +1604,24 @@
 
             </div>
 
+            <div class="shelf-search-shell" role="search">
+                <span class="shelf-search-icon" aria-hidden="true">⌕</span>
+                <input
+                    id="shelf-search-input"
+                    class="shelf-search-input"
+                    type="search"
+                    placeholder="搜索书名、作者或分类"
+                    autocomplete="off"
+                    oninput="handleShelfSearch(this.value)"
+                    aria-label="搜索书架">
+                <button
+                    id="shelf-search-clear"
+                    class="shelf-search-clear"
+                    type="button"
+                    onclick="clearShelfSearch()"
+                    aria-label="清除搜索">清除</button>
+            </div>
+
             <button
                 class="btn-primary"
                 onclick="openAddBookModal()">
@@ -1780,6 +1908,15 @@
 
             <div class="detail-left">
                 <div class="detail-cover-box" id="detail-cover-slot"></div>
+                <div class="cover-edit-panel" id="cover-edit-panel">
+                    <input id="detail-cover-url-input" class="cover-url-input" type="url" placeholder="粘贴 HTTPS 封面图片链接" autocomplete="off">
+                    <div class="cover-edit-actions">
+                        <button class="cover-edit-btn primary" type="button" onclick="saveManualBookCover()">保存封面</button>
+                        <button class="cover-edit-btn" type="button" onclick="retryAutomaticBookCover()">自动匹配</button>
+                        <button class="cover-edit-btn" type="button" onclick="restoreArtworkBookCover()">艺术封面</button>
+                    </div>
+                    <div class="cover-edit-status" id="cover-edit-status" role="status"></div>
+                </div>
                 <h2 class="detail-title" id="detail-title-slot">书名</h2>
                 <div class="detail-author" id="detail-author-slot">作者</div>
                 <div class="detail-category-badge" id="detail-cat-slot">分类</div>
@@ -3028,6 +3165,7 @@ async function loadBooksFromSupabase(user = currentUser) {
             activeBookId = null;
             managedReadingInsight = null;
             isEditing = false;
+            resetShelfSearchState();
             booksData = createDemoBooks();
             refreshApplicationData();
         }
@@ -3037,6 +3175,7 @@ async function loadBooksFromSupabase(user = currentUser) {
             activeBookId = null;
             managedReadingInsight = null;
             isEditing = false;
+            resetShelfSearchState();
 
             if (!currentUser) {
                 showGuestShelf();
@@ -3293,17 +3432,13 @@ function getCategoryStyle(cat) {
         function getSafeBookCoverUrl(value) {
             try {
                 const url = new URL(String(value || '').replace(/^http:/i, 'https:'));
-                const allowedHosts = new Set([
-                    'books.google.com',
-                    'books.googleusercontent.com',
-                    'covers.openlibrary.org'
-                ]);
-                const isRegionalGoogleBooksHost = /^books\.google\.(?:[a-z]{2,3}|co\.[a-z]{2}|com\.[a-z]{2})$/i.test(url.hostname);
-                return url.protocol === 'https:' && (allowedHosts.has(url.hostname) || isRegionalGoogleBooksHost) ? url.toString() : '';
+                return url.protocol === 'https:' ? url.toString() : '';
             } catch {
                 return '';
             }
         }
+
+        const ARTWORK_COVER_SENTINEL = 'artwork:';
 
         function createBookCover(book) {
             const fallback = createProceduralCover(book.title, book.author, book.category);
@@ -3321,6 +3456,40 @@ function getCategoryStyle(cat) {
         }
 
         const attemptedBookCovers = new Set();
+        let shelfSearchQuery = '';
+
+        function normalizeShelfSearchText(value) {
+            return String(value || '').normalize('NFKC').toLocaleLowerCase().replace(/\s+/g, ' ').trim();
+        }
+
+        function getFilteredShelfBooks() {
+            if (!shelfSearchQuery) return booksData;
+            return booksData.filter(book => normalizeShelfSearchText(
+                `${book.title || ''} ${book.author || ''} ${book.category || ''}`
+            ).includes(shelfSearchQuery));
+        }
+
+        function handleShelfSearch(value) {
+            shelfSearchQuery = normalizeShelfSearchText(value);
+            document.getElementById('shelf-search-clear')?.classList.toggle('visible', Boolean(shelfSearchQuery));
+            renderShelfView();
+        }
+
+        function clearShelfSearch() {
+            shelfSearchQuery = '';
+            const input = document.getElementById('shelf-search-input');
+            if (input) input.value = '';
+            document.getElementById('shelf-search-clear')?.classList.remove('visible');
+            renderShelfView();
+            input?.focus();
+        }
+
+        function resetShelfSearchState() {
+            shelfSearchQuery = '';
+            const input = document.getElementById('shelf-search-input');
+            if (input) input.value = '';
+            document.getElementById('shelf-search-clear')?.classList.remove('visible');
+        }
 
         async function hydrateBookCover(book) {
             if (!book || (getSafeBookCoverUrl(book.coverUrl) && !isLowResolutionGoogleBooksCover(book.coverUrl)) || attemptedBookCovers.has(book.id)) return false;
@@ -3363,11 +3532,97 @@ function getCategoryStyle(cat) {
             return true;
         }
 
+        function setCoverEditStatus(message, isError = false) {
+            const status = document.getElementById('cover-edit-status');
+            if (!status) return;
+            status.textContent = message || '';
+            status.style.color = isError ? '#b91c1c' : '#64748b';
+        }
+
+        function verifyRemoteImage(url) {
+            return new Promise((resolve, reject) => {
+                const image = new Image();
+                const timeout = setTimeout(() => reject(new Error('IMAGE_TIMEOUT')), 8_000);
+                image.referrerPolicy = 'no-referrer';
+                image.onload = () => {
+                    clearTimeout(timeout);
+                    resolve(true);
+                };
+                image.onerror = () => {
+                    clearTimeout(timeout);
+                    reject(new Error('IMAGE_UNAVAILABLE'));
+                };
+                image.src = url;
+            });
+        }
+
+        async function saveManualBookCover() {
+            if (!requireAuthenticatedUser() || !activeBookId) return;
+            const book = booksData.find(item => item.id === activeBookId);
+            const input = document.getElementById('detail-cover-url-input');
+            if (!book || !input) return;
+            const coverUrl = getSafeBookCoverUrl(input.value.trim());
+            if (!coverUrl) {
+                setCoverEditStatus('请输入可公开访问的 HTTPS 图片链接。', true);
+                return;
+            }
+            setCoverEditStatus('正在验证图片…');
+            try {
+                await verifyRemoteImage(coverUrl);
+            } catch {
+                setCoverEditStatus('该链接无法加载为图片，未保存。', true);
+                return;
+            }
+            book.coverUrl = coverUrl;
+            attemptedBookCovers.add(book.id);
+            await saveToLocalStorage();
+            document.getElementById('detail-cover-slot').innerHTML = createBookCover(book);
+            renderShelfView();
+            setCoverEditStatus('封面已保存并同步。');
+        }
+
+        async function restoreArtworkBookCover() {
+            if (!requireAuthenticatedUser() || !activeBookId) return;
+            const book = booksData.find(item => item.id === activeBookId);
+            if (!book) return;
+            book.coverUrl = ARTWORK_COVER_SENTINEL;
+            attemptedBookCovers.add(book.id);
+            await saveToLocalStorage();
+            document.getElementById('detail-cover-url-input').value = '';
+            document.getElementById('detail-cover-slot').innerHTML = createBookCover(book);
+            renderShelfView();
+            setCoverEditStatus('已恢复分类艺术封面。');
+        }
+
+        async function retryAutomaticBookCover() {
+            if (!requireAuthenticatedUser() || !activeBookId) return;
+            const book = booksData.find(item => item.id === activeBookId);
+            if (!book) return;
+            book.coverUrl = '';
+            attemptedBookCovers.delete(book.id);
+            setCoverEditStatus('正在重新匹配可信封面…');
+            await saveToLocalStorage();
+            const matched = await hydrateBookCover(book);
+            document.getElementById('detail-cover-url-input').value = getSafeBookCoverUrl(book.coverUrl);
+            document.getElementById('detail-cover-slot').innerHTML = createBookCover(book);
+            renderShelfView();
+            setCoverEditStatus(matched ? '已匹配并同步封面。' : '未找到可信封面，已保留艺术封面。', !matched);
+        }
+
         // 书架渲染（包含悬浮编辑与删除按钮）
         function renderShelfView() {
             const container = document.getElementById('shelf-books-container');
             container.innerHTML = '';
-            booksData.forEach(book => {
+            const filteredBooks = getFilteredShelfBooks();
+            if (!filteredBooks.length) {
+                container.innerHTML = `
+                    <div class="shelf-search-empty">
+                        <strong>没有找到匹配的书籍</strong>
+                        <span>试试书名、作者或分类，或清除当前搜索。</span>
+                    </div>`;
+                return;
+            }
+            filteredBooks.forEach(book => {
                 const card = document.createElement('div');
                 card.className = 'book-card';
                 card.onclick = () => openBookDetailPanel(book.id);
@@ -3631,6 +3886,8 @@ function getCategoryStyle(cat) {
             noteMethodSelect.disabled = !currentUser;
 
             document.getElementById('detail-cover-slot').innerHTML = createBookCover(book);
+            document.getElementById('detail-cover-url-input').value = getSafeBookCoverUrl(book.coverUrl);
+            setCoverEditStatus('');
             if (!book.isDemo && (!book.coverUrl || isLowResolutionGoogleBooksCover(book.coverUrl))) {
                 void hydrateBookCover(book);
             }
@@ -3682,6 +3939,7 @@ function getCategoryStyle(cat) {
         function updateDetailModeUI() {
             const toggleBtn = document.getElementById('detail-master-edit-btn');
             const editElements = document.querySelectorAll('.edit-only-btn');
+            const coverEditPanel = document.getElementById('cover-edit-panel');
             const fields = ['concepts', 'thoughts', 'actions'];
             
             const book = booksData.find(b => b.id === activeBookId);
@@ -3697,11 +3955,13 @@ function getCategoryStyle(cat) {
                 });
 
                 explanationElements.forEach(el => el.style.display = 'block');
+                coverEditPanel?.classList.add('active');
             } else {
                 toggleBtn.innerText = '✏️'; 
                 toggleBtn.classList.remove('editing');
                 editElements.forEach(el => el.style.display = 'none');
                 explanationElements.forEach(el => el.style.display = 'none');
+                coverEditPanel?.classList.remove('active');
                 fields.forEach(f => {
                     document.getElementById(`mod-${f}-text`).style.display = 'block';
                     document.getElementById(`mod-${f}-input`).style.display = 'none';
