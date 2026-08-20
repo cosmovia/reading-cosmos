@@ -1125,6 +1125,7 @@
         .cosmos-search-input::placeholder { color: #64748b; }
         .cosmos-tool-btn { border: 1px solid rgba(125, 211, 252, 0.18); border-radius: 9px; background: rgba(14, 165, 233, 0.12); color: #bae6fd; padding: 7px 10px; font-size: 0.78rem; cursor: pointer; white-space: nowrap; }
         .cosmos-tool-btn:hover { background: rgba(14, 165, 233, 0.24); }
+        .cosmos-tool-btn.active { background: rgba(14, 165, 233, 0.3); border-color: rgba(125, 211, 252, 0.52); color: #fff; }
         .cosmos-search-status { color: #94a3b8; font-size: 0.76rem; pointer-events: none; }
         .cosmos-fullscreen-btn {
             position: absolute;
@@ -1215,6 +1216,8 @@
             color: #64748b;
             line-height: 1.35;
         }
+
+        .popover-trajectory { margin-top: 3px; font-size: 0.7rem; color: #94a3b8; }
 
         .popover-title {
             font-size: 0.95rem;
@@ -1696,6 +1699,7 @@
                         <datalist id="cosmos-book-options"></datalist>
                         <button class="cosmos-tool-btn" onclick="locateCosmosPlanet()">定位</button>
                         <button class="cosmos-tool-btn" onclick="resetCosmosView()">重置</button>
+                        <button class="cosmos-tool-btn" id="cosmos-trajectory-btn" type="button" onclick="toggleReadingTrajectory()" aria-pressed="false" title="按阅读完成日期显示轨迹">轨迹</button>
                     </div>
                     <div class="cosmos-search-status" id="cosmos-search-status">按分类形成知识星系</div>
                 </div>
@@ -1724,6 +1728,7 @@
                             </div>
                             <div class="rating-stars" id="pop-rating-slot" style="margin-top:4px;">★★★★★</div>
                             <div class="popover-gravity" id="pop-gravity-slot">思想引力正在形成</div>
+                            <div class="popover-trajectory" id="pop-trajectory-slot"></div>
                         </div>
                     </div>
                 </div>
@@ -1896,6 +1901,10 @@
                     <option value="rat">R-A-T · 共鸣、提炼、转化</option>
                 </select>
             </div>
+            <div class="form-group">
+                <label for="input-finished-at">阅读完成日期（可选）</label>
+                <input type="date" id="input-finished-at" class="form-input">
+            </div>
             <div class="modal-buttons">
                 <button class="btn-secondary" onclick="closeAddBookModal()" style="background:#f1f5f9; border:none; padding:10px 16px; border-radius:8px; cursor:pointer;">取消</button>
                 <button class="btn-primary" onclick="submitAddBook()">启动构筑</button>
@@ -2011,6 +2020,10 @@
                     <div class="reading-profile-field full">
                         <label for="detail-reading-minutes">阅读投入（分钟）</label>
                         <input id="detail-reading-minutes" class="reading-profile-control" type="number" min="0" max="100000" step="10" inputmode="numeric" onchange="updateCurrentBookCosmosProfile()">
+                    </div>
+                    <div class="reading-profile-field full">
+                        <label for="detail-finished-at">阅读完成日期</label>
+                        <input id="detail-finished-at" class="reading-profile-control" type="date" onchange="updateCurrentBookCosmosProfile()">
                     </div>
                 </div>
             </div>
@@ -2458,6 +2471,7 @@ function serializeBookForBackup(book) {
         category: String(book.category || '未分类'),
         rating: Number(book.rating || 0),
         addedAt: new Date(Number(book.timestamp || Date.now())).toISOString(),
+        finishedAt: normalizeFinishedAt(book.finishedAt),
         coverUrl: getSafeBookCoverUrl(book.coverUrl) || (book.coverUrl === ARTWORK_COVER_SENTINEL ? ARTWORK_COVER_SENTINEL : ''),
         noteMethod: normalizeNoteMethod(book.noteMethod, book.category),
         notesRevision: Number(book.notesRevision || 0),
@@ -3089,6 +3103,9 @@ async function syncBooksToSupabase() {
                 normalizeBookImportance(book.importance),
             reading_minutes:
                 normalizeReadingMinutes(book.readingMinutes),
+            ...(booksFinishedAtSupported ? {
+                finished_at: normalizeFinishedAt(book.finishedAt) || null
+            } : {}),
 
             updated_at:
                 new Date().toISOString()
@@ -3155,6 +3172,10 @@ async function loadBooksFromSupabase(user = currentUser) {
         return false;
     }
 
+    booksFinishedAtSupported = data.length
+        ? Object.prototype.hasOwnProperty.call(data[0], 'finished_at')
+        : !(await supabaseClient.from('books').select('finished_at').limit(1)).error;
+
     booksData = data.map(book => ({
 
         cloudId:
@@ -3211,6 +3232,9 @@ async function loadBooksFromSupabase(user = currentUser) {
         readingMinutes:
             normalizeReadingMinutes(book.reading_minutes),
 
+        finishedAt:
+            normalizeFinishedAt(book.finished_at),
+
         aiData:
             sanitizeBookAIData(book.ai_data)
 
@@ -3240,6 +3264,7 @@ async function loadBookRelationships(user = currentUser) {
         bookRelationships = [];
         return false;
     }
+
     const localIdByCloudId = new Map(booksData.map(book => [book.cloudId, book.id]));
     bookRelationships = (data || []).map(item => ({
         id: item.id,
@@ -3299,6 +3324,7 @@ async function loadBookRelationships(user = currentUser) {
 
         let booksData = [];
         let bookRelationships = [];
+        let booksFinishedAtSupported = false;
         let currentUser = null;
         let currentView = 'shelf';
         let activeBookId = null;
@@ -3371,6 +3397,26 @@ async function loadBookRelationships(user = currentUser) {
         function normalizeReadingMinutes(value) {
             const minutes = Number.parseInt(value, 10);
             return Number.isFinite(minutes) ? Math.min(100000, Math.max(0, minutes)) : 0;
+        }
+
+        function normalizeFinishedAt(value) {
+            const text = String(value || '').trim();
+            const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+            if (!match) return '';
+            const year = Number(match[1]);
+            const month = Number(match[2]);
+            const day = Number(match[3]);
+            const date = new Date(Date.UTC(year, month - 1, day));
+            return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+                ? text
+                : '';
+        }
+
+        function getLocalDateInputValue(date = new Date()) {
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
         }
 
         function applyNoteMethodUI(book) {
@@ -3518,7 +3564,8 @@ async function loadBookRelationships(user = currentUser) {
         let cosmosState = {
             scale: 1.0, offsetX: 0, offsetY: 0, isDragging: false, startX: 0, startY: 0,
             planets: [], galaxies: [], hoveredPlanetIndex: null, focusedPlanetId: null,
-            animationFrameId: null, time: 0, isImmersive: false, viewBeforeImmersive: null
+            animationFrameId: null, time: 0, isImmersive: false, viewBeforeImmersive: null,
+            showTrajectory: false
         };
 
         const CATEGORY_MAP = {
@@ -4003,6 +4050,7 @@ function getCategoryStyle(cat) {
             document.getElementById('input-book-category').value = '';
             document.getElementById('input-note-method').value =
                 'first_principles';
+            document.getElementById('input-finished-at').value = getLocalDateInputValue();
             document.getElementById('add-book-modal').classList.add('active');
         }
         function closeAddBookModal() {
@@ -4016,6 +4064,9 @@ function getCategoryStyle(cat) {
             let category = document.getElementById('input-book-category').value.trim();
             const noteMethod =
                 document.getElementById('input-note-method').value;
+            const finishedAt = normalizeFinishedAt(
+                document.getElementById('input-finished-at').value
+            );
             if(!title || !author) { alert('请完整填写书名和作者'); return; }
             if(!category) category = '未分类';
 
@@ -4026,6 +4077,7 @@ function getCategoryStyle(cat) {
                 readingDepth: 'standard',
                 importance: 1,
                 readingMinutes: 0,
+                finishedAt,
                 aiData: {},
                 coverUrl: '',
                 summary: '',
@@ -4186,6 +4238,7 @@ function getCategoryStyle(cat) {
             book.readingDepth = normalizeReadingDepth(book.readingDepth);
             book.importance = normalizeBookImportance(book.importance);
             book.readingMinutes = normalizeReadingMinutes(book.readingMinutes);
+            book.finishedAt = normalizeFinishedAt(book.finishedAt);
 
             applyNoteMethodUI(book);
 
@@ -4206,6 +4259,7 @@ function getCategoryStyle(cat) {
             document.getElementById('detail-reading-depth').value = book.readingDepth;
             document.getElementById('detail-book-importance').value = String(book.importance);
             document.getElementById('detail-reading-minutes').value = String(book.readingMinutes);
+            document.getElementById('detail-finished-at').value = book.finishedAt;
             renderBookRelationships(book);
 
             document.getElementById('detail-cover-slot').innerHTML = createBookCover(book);
@@ -4413,8 +4467,12 @@ function getCategoryStyle(cat) {
             book.readingMinutes = normalizeReadingMinutes(
                 document.getElementById('detail-reading-minutes').value
             );
+            book.finishedAt = normalizeFinishedAt(
+                document.getElementById('detail-finished-at').value
+            );
             document.getElementById('detail-book-importance').value = String(book.importance);
             document.getElementById('detail-reading-minutes').value = String(book.readingMinutes);
+            document.getElementById('detail-finished-at').value = book.finishedAt;
             await saveToLocalStorage();
             rebuildUniversePlanets();
         }
@@ -4924,6 +4982,13 @@ async function ensureReadingInsightConsent() {
                     const distance = index === 0 ? 0 : 34 * Math.sqrt(index);
                     const readingDepth = normalizeReadingDepth(book.readingDepth);
                     const thoughtGravity = getThoughtGravity(book);
+                    const explicitFinishedAt = normalizeFinishedAt(book.finishedAt);
+                    const fallbackTimestamp = Number(book.timestamp || 0);
+                    const trajectoryDate = explicitFinishedAt || (
+                        Number.isFinite(fallbackTimestamp) && fallbackTimestamp > 0
+                            ? getLocalDateInputValue(new Date(fallbackTimestamp))
+                            : ''
+                    );
                     const radius = readingDepth === 'core' ? 15.8 : readingDepth === 'deep' ? 14.2 : 12.8;
                     furthestEdge = Math.max(furthestEdge, distance + radius);
                     cosmosState.planets.push({
@@ -4938,6 +5003,11 @@ async function ensureReadingInsightConsent() {
                         gravityLevel: thoughtGravity.level,
                         gravityLabel: thoughtGravity.label,
                         bridgeCount: thoughtGravity.bridgeCount,
+                        trajectoryDate,
+                        trajectoryInferred: !explicitFinishedAt && Boolean(trajectoryDate),
+                        trajectoryTime: explicitFinishedAt
+                            ? Date.parse(`${explicitFinishedAt}T00:00:00Z`)
+                            : fallbackTimestamp,
                         x: galaxy.x + Math.cos(angle) * distance,
                         y: galaxy.y + Math.sin(angle) * distance,
                         radius,
@@ -4974,7 +5044,16 @@ async function ensureReadingInsightConsent() {
             const visibleBridgeCount = bookRelationships.filter(relationship =>
                 planetIds.has(relationship.sourceBookId) && planetIds.has(relationship.targetBookId)
             ).length;
-            status.innerText = `${cosmosState.planets.length} 颗思想星球 · ${cosmosState.galaxies.length} 个知识星系 · ${visibleBridgeCount} 条知识桥梁`;
+            const trajectoryLabel = cosmosState.showTrajectory ? ' · 阅读轨迹已开启' : '';
+            status.innerText = `${cosmosState.planets.length} 颗思想星球 · ${cosmosState.galaxies.length} 个知识星系 · ${visibleBridgeCount} 条知识桥梁${trajectoryLabel}`;
+        }
+
+        function toggleReadingTrajectory() {
+            cosmosState.showTrajectory = !cosmosState.showTrajectory;
+            const button = document.getElementById('cosmos-trajectory-btn');
+            button?.classList.toggle('active', cosmosState.showTrajectory);
+            button?.setAttribute('aria-pressed', String(cosmosState.showTrajectory));
+            updateCosmosOverviewStatus();
         }
 
         function handleCosmosSearchKey(event) {
@@ -5041,6 +5120,28 @@ async function ensureReadingInsightConsent() {
             });
 
             const planetById = new Map(cosmosState.planets.map(planet => [planet.id, planet]));
+            if (cosmosState.showTrajectory) {
+                const trajectoryPlanets = cosmosState.planets
+                    .filter(planet => Number.isFinite(planet.trajectoryTime) && planet.trajectoryTime > 0)
+                    .sort((a, b) => a.trajectoryTime - b.trajectoryTime || a.title.localeCompare(b.title, 'zh-CN'));
+                if (trajectoryPlanets.length > 1) {
+                    cosmosCtx.save();
+                    cosmosCtx.strokeStyle = 'rgba(251, 191, 36, 0.28)';
+                    cosmosCtx.lineWidth = 0.9;
+                    cosmosCtx.setLineDash([3, 6]);
+                    cosmosCtx.beginPath();
+                    trajectoryPlanets.forEach((planet, index) => {
+                        const drift = cosmosState.time * planet.driftSpeed + planet.driftPhase;
+                        const x = planet.x + Math.cos(drift) * 3;
+                        const y = planet.y + Math.sin(drift) * 3;
+                        if (index === 0) cosmosCtx.moveTo(x, y);
+                        else cosmosCtx.lineTo(x, y);
+                    });
+                    cosmosCtx.stroke();
+                    cosmosCtx.restore();
+                }
+            }
+
             bookRelationships.forEach(relationship => {
                 const source = planetById.get(relationship.sourceBookId);
                 const target = planetById.get(relationship.targetBookId);
@@ -5137,6 +5238,9 @@ async function ensureReadingInsightConsent() {
             document.getElementById('pop-rating-slot').innerText = '★'.repeat(planet.rating) + '☆'.repeat(5 - planet.rating);
             document.getElementById('pop-gravity-slot').innerText =
                 `思想引力 ${planet.gravityLevel}/5 · ${planet.gravityLabel} · ${planet.bridgeCount} 条知识桥梁`;
+            document.getElementById('pop-trajectory-slot').innerText = planet.trajectoryDate
+                ? `阅读完成：${planet.trajectoryDate}${planet.trajectoryInferred ? '（按加入日期推定）' : ''}`
+                : '阅读完成日期未记录';
             const popoverBook = booksData.find(book => book.id === planet.id);
             document.getElementById('pop-cover-slot').innerHTML = createBookCover(popoverBook || planet);
 
