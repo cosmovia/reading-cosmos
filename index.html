@@ -4960,20 +4960,21 @@ async function ensureReadingInsightConsent() {
                 });
             }
             fitCosmosToContent();
-            updateCosmosGravityStatus();
+            updateCosmosOverviewStatus();
         }
 
-        function updateCosmosGravityStatus() {
+        function updateCosmosOverviewStatus() {
             const status = document.getElementById('cosmos-search-status');
             if (!status) return;
             if (!cosmosState.planets.length) {
                 status.innerText = '按分类形成知识星系';
                 return;
             }
-            const core = [...cosmosState.planets].sort((a, b) =>
-                b.gravityLevel - a.gravityLevel || b.bridgeCount - a.bridgeCount
-            )[0];
-            status.innerText = `当前最强引力：${core.title} · ${core.gravityLabel}`;
+            const planetIds = new Set(cosmosState.planets.map(planet => planet.id));
+            const visibleBridgeCount = bookRelationships.filter(relationship =>
+                planetIds.has(relationship.sourceBookId) && planetIds.has(relationship.targetBookId)
+            ).length;
+            status.innerText = `${cosmosState.planets.length} 颗思想星球 · ${cosmosState.galaxies.length} 个知识星系 · ${visibleBridgeCount} 条知识桥梁`;
         }
 
         function handleCosmosSearchKey(event) {
@@ -5011,7 +5012,7 @@ async function ensureReadingInsightConsent() {
             cosmosState.hoveredPlanetIndex = null;
             cosmosState.focusedPlanetId = null;
             document.getElementById('cosmos-search-input').value = '';
-            updateCosmosGravityStatus();
+            updateCosmosOverviewStatus();
             document.getElementById('planet-popover').style.display = 'none';
             fitCosmosToContent();
         }
