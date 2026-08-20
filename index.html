@@ -2174,6 +2174,20 @@ async function getCurrentSupabaseUser() {
 window.initializeSupabaseClient = initializeSupabaseClient;
 initializeSupabaseClient();
 
+function waitForSupabaseClient(timeoutMs = 12000) {
+    if (supabaseClient) return Promise.resolve(true);
+    const startedAt = Date.now();
+    return new Promise(resolve => {
+        const timer = window.setInterval(() => {
+            if (window.supabase && !supabaseClient) initializeSupabaseClient();
+            if (supabaseClient || Date.now() - startedAt >= timeoutMs) {
+                window.clearInterval(timer);
+                resolve(Boolean(supabaseClient));
+            }
+        }, 150);
+    });
+}
+
 console.log('Supabase Client Ready');
 
 // =============================
@@ -2226,8 +2240,15 @@ async function showLogin() {
 async function submitAuthForm(event) {
     event.preventDefault();
     if (!supabaseClient) {
-        setAuthStatus('登录服务资源暂时未加载，请刷新页面后重试。', true);
-        return;
+        const pendingButton = document.getElementById('auth-submit-btn');
+        pendingButton.disabled = true;
+        setAuthStatus('正在连接登录服务…');
+        const clientReady = await waitForSupabaseClient();
+        pendingButton.disabled = false;
+        if (!clientReady) {
+            setAuthStatus('登录服务连接超时，请检查网络后重试。', true);
+            return;
+        }
     }
     const email = document.getElementById('auth-email').value.trim();
     const password = document.getElementById('auth-password').value;
