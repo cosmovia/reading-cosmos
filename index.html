@@ -1569,6 +1569,7 @@
 
 }
     </style>
+<script src="./supabase-fallback.js"></script>
 <script async src="https://unpkg.com/@supabase/supabase-js@2.57.4/dist/umd/supabase.min.js" onload="window.initializeSupabaseClient?.()"></script>
 <script async src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.4/dist/umd/supabase.min.js" onload="window.initializeSupabaseClient?.()"></script>
 </head>
@@ -2152,8 +2153,14 @@ const SUPABASE_ANON_KEY =
 let supabaseClient = null;
 
 async function initializeSupabaseClient() {
-    if (supabaseClient || !window.supabase) return;
-    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    if (supabaseClient) return;
+    if (window.supabase) {
+        supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    } else if (window.createReadingCosmosSupabaseFallback) {
+        supabaseClient = window.createReadingCosmosSupabaseFallback(SUPABASE_URL, SUPABASE_ANON_KEY);
+    } else {
+        return;
+    }
     if (document.readyState === 'loading') return;
     const user = await getCurrentSupabaseUser();
     if (user) await activateAuthenticatedShelf(user);
