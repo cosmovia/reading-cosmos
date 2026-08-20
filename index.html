@@ -1125,7 +1125,6 @@
         .cosmos-search-input::placeholder { color: #64748b; }
         .cosmos-tool-btn { border: 1px solid rgba(125, 211, 252, 0.18); border-radius: 9px; background: rgba(14, 165, 233, 0.12); color: #bae6fd; padding: 7px 10px; font-size: 0.78rem; cursor: pointer; white-space: nowrap; }
         .cosmos-tool-btn:hover { background: rgba(14, 165, 233, 0.24); }
-        .cosmos-tool-btn.active { background: rgba(14, 165, 233, 0.3); border-color: rgba(125, 211, 252, 0.52); color: #fff; }
         .cosmos-search-status { color: #94a3b8; font-size: 0.76rem; pointer-events: none; }
         .cosmos-fullscreen-btn {
             position: absolute;
@@ -1216,8 +1215,6 @@
             color: #64748b;
             line-height: 1.35;
         }
-
-        .popover-trajectory { margin-top: 3px; font-size: 0.7rem; color: #94a3b8; }
 
         .popover-title {
             font-size: 0.95rem;
@@ -1699,7 +1696,6 @@
                         <datalist id="cosmos-book-options"></datalist>
                         <button class="cosmos-tool-btn" onclick="locateCosmosPlanet()">定位</button>
                         <button class="cosmos-tool-btn" onclick="resetCosmosView()">重置</button>
-                        <button class="cosmos-tool-btn" id="cosmos-trajectory-btn" type="button" onclick="toggleReadingTrajectory()" aria-pressed="false" title="按阅读完成日期显示轨迹">轨迹</button>
                     </div>
                     <div class="cosmos-search-status" id="cosmos-search-status">按分类形成知识星系</div>
                 </div>
@@ -1728,7 +1724,6 @@
                             </div>
                             <div class="rating-stars" id="pop-rating-slot" style="margin-top:4px;">★★★★★</div>
                             <div class="popover-gravity" id="pop-gravity-slot">思想引力正在形成</div>
-                            <div class="popover-trajectory" id="pop-trajectory-slot"></div>
                         </div>
                     </div>
                 </div>
@@ -3564,8 +3559,7 @@ async function loadBookRelationships(user = currentUser) {
         let cosmosState = {
             scale: 1.0, offsetX: 0, offsetY: 0, isDragging: false, startX: 0, startY: 0,
             planets: [], galaxies: [], hoveredPlanetIndex: null, focusedPlanetId: null,
-            animationFrameId: null, time: 0, isImmersive: false, viewBeforeImmersive: null,
-            showTrajectory: false
+            animationFrameId: null, time: 0, isImmersive: false, viewBeforeImmersive: null
         };
 
         const CATEGORY_MAP = {
@@ -4982,13 +4976,6 @@ async function ensureReadingInsightConsent() {
                     const distance = index === 0 ? 0 : 34 * Math.sqrt(index);
                     const readingDepth = normalizeReadingDepth(book.readingDepth);
                     const thoughtGravity = getThoughtGravity(book);
-                    const explicitFinishedAt = normalizeFinishedAt(book.finishedAt);
-                    const fallbackTimestamp = Number(book.timestamp || 0);
-                    const trajectoryDate = explicitFinishedAt || (
-                        Number.isFinite(fallbackTimestamp) && fallbackTimestamp > 0
-                            ? getLocalDateInputValue(new Date(fallbackTimestamp))
-                            : ''
-                    );
                     const radius = readingDepth === 'core' ? 15.8 : readingDepth === 'deep' ? 14.2 : 12.8;
                     furthestEdge = Math.max(furthestEdge, distance + radius);
                     cosmosState.planets.push({
@@ -5003,11 +4990,6 @@ async function ensureReadingInsightConsent() {
                         gravityLevel: thoughtGravity.level,
                         gravityLabel: thoughtGravity.label,
                         bridgeCount: thoughtGravity.bridgeCount,
-                        trajectoryDate,
-                        trajectoryInferred: !explicitFinishedAt && Boolean(trajectoryDate),
-                        trajectoryTime: explicitFinishedAt
-                            ? Date.parse(`${explicitFinishedAt}T00:00:00Z`)
-                            : fallbackTimestamp,
                         x: galaxy.x + Math.cos(angle) * distance,
                         y: galaxy.y + Math.sin(angle) * distance,
                         radius,
@@ -5044,16 +5026,7 @@ async function ensureReadingInsightConsent() {
             const visibleBridgeCount = bookRelationships.filter(relationship =>
                 planetIds.has(relationship.sourceBookId) && planetIds.has(relationship.targetBookId)
             ).length;
-            const trajectoryLabel = cosmosState.showTrajectory ? ' · 阅读轨迹已开启' : '';
-            status.innerText = `${cosmosState.planets.length} 颗思想星球 · ${cosmosState.galaxies.length} 个知识星系 · ${visibleBridgeCount} 条知识桥梁${trajectoryLabel}`;
-        }
-
-        function toggleReadingTrajectory() {
-            cosmosState.showTrajectory = !cosmosState.showTrajectory;
-            const button = document.getElementById('cosmos-trajectory-btn');
-            button?.classList.toggle('active', cosmosState.showTrajectory);
-            button?.setAttribute('aria-pressed', String(cosmosState.showTrajectory));
-            updateCosmosOverviewStatus();
+            status.innerText = `${cosmosState.planets.length} 颗思想星球 · ${cosmosState.galaxies.length} 个知识星系 · ${visibleBridgeCount} 条知识桥梁`;
         }
 
         function handleCosmosSearchKey(event) {
@@ -5120,28 +5093,6 @@ async function ensureReadingInsightConsent() {
             });
 
             const planetById = new Map(cosmosState.planets.map(planet => [planet.id, planet]));
-            if (cosmosState.showTrajectory) {
-                const trajectoryPlanets = cosmosState.planets
-                    .filter(planet => Number.isFinite(planet.trajectoryTime) && planet.trajectoryTime > 0)
-                    .sort((a, b) => a.trajectoryTime - b.trajectoryTime || a.title.localeCompare(b.title, 'zh-CN'));
-                if (trajectoryPlanets.length > 1) {
-                    cosmosCtx.save();
-                    cosmosCtx.strokeStyle = 'rgba(251, 191, 36, 0.28)';
-                    cosmosCtx.lineWidth = 0.9;
-                    cosmosCtx.setLineDash([3, 6]);
-                    cosmosCtx.beginPath();
-                    trajectoryPlanets.forEach((planet, index) => {
-                        const drift = cosmosState.time * planet.driftSpeed + planet.driftPhase;
-                        const x = planet.x + Math.cos(drift) * 3;
-                        const y = planet.y + Math.sin(drift) * 3;
-                        if (index === 0) cosmosCtx.moveTo(x, y);
-                        else cosmosCtx.lineTo(x, y);
-                    });
-                    cosmosCtx.stroke();
-                    cosmosCtx.restore();
-                }
-            }
-
             bookRelationships.forEach(relationship => {
                 const source = planetById.get(relationship.sourceBookId);
                 const target = planetById.get(relationship.targetBookId);
@@ -5238,9 +5189,6 @@ async function ensureReadingInsightConsent() {
             document.getElementById('pop-rating-slot').innerText = '★'.repeat(planet.rating) + '☆'.repeat(5 - planet.rating);
             document.getElementById('pop-gravity-slot').innerText =
                 `思想引力 ${planet.gravityLevel}/5 · ${planet.gravityLabel} · ${planet.bridgeCount} 条知识桥梁`;
-            document.getElementById('pop-trajectory-slot').innerText = planet.trajectoryDate
-                ? `阅读完成：${planet.trajectoryDate}${planet.trajectoryInferred ? '（按加入日期推定）' : ''}`
-                : '阅读完成日期未记录';
             const popoverBook = booksData.find(book => book.id === planet.id);
             document.getElementById('pop-cover-slot').innerHTML = createBookCover(popoverBook || planet);
 
