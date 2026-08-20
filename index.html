@@ -1119,13 +1119,18 @@
             display: block;
         }
 
-        .cosmos-toolbar { position: absolute; top: 18px; left: 18px; right: 18px; z-index: 55; display: flex; align-items: center; gap: 10px; pointer-events: none; }
-        .cosmos-search-shell { display: flex; align-items: center; gap: 6px; padding: 5px; border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 12px; background: rgba(2, 6, 23, 0.48); backdrop-filter: blur(14px); box-shadow: 0 8px 24px rgba(2, 6, 23, 0.16); pointer-events: auto; }
+        .cosmos-toolbar { position: absolute; top: 18px; left: 18px; z-index: 55; display: flex; align-items: flex-start; gap: 8px; pointer-events: none; }
+        .cosmos-action-bar { display:flex; gap:6px; padding:4px; border:1px solid rgba(148, 163, 184, 0.16); border-radius:12px; background:rgba(2, 6, 23, 0.4); backdrop-filter:blur(14px); pointer-events:auto; }
+        .cosmos-icon-btn { width:34px; height:34px; display:grid; place-items:center; border:0; border-radius:9px; background:transparent; color:#94a3b8; font-size:1rem; cursor:pointer; }
+        .cosmos-icon-btn:hover, .cosmos-icon-btn.active { color:#e0f2fe; background:rgba(14, 165, 233, 0.2); }
+        .cosmos-search-shell { display: none; align-items: center; gap: 6px; padding: 5px; border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 12px; background: rgba(2, 6, 23, 0.48); backdrop-filter: blur(14px); box-shadow: 0 8px 24px rgba(2, 6, 23, 0.16); pointer-events: auto; }
+        .cosmos-search-shell.active { display:flex; }
         .cosmos-search-input { width: min(190px, 34vw); border: none; outline: none; background: transparent; color: #e2e8f0; padding: 5px 7px; font-size: 0.8rem; }
         .cosmos-search-input::placeholder { color: #64748b; }
         .cosmos-tool-btn { border: 1px solid rgba(125, 211, 252, 0.18); border-radius: 9px; background: rgba(14, 165, 233, 0.12); color: #bae6fd; padding: 7px 10px; font-size: 0.78rem; cursor: pointer; white-space: nowrap; }
         .cosmos-tool-btn:hover { background: rgba(14, 165, 233, 0.24); }
-        .cosmos-search-status { color: #94a3b8; font-size: 0.76rem; pointer-events: none; }
+        .cosmos-search-status { display:none; color: #94a3b8; font-size: 0.72rem; pointer-events: none; max-width:180px; }
+        .cosmos-search-shell.active + .cosmos-search-status { display:block; }
         .cosmos-fullscreen-btn {
             position: absolute;
             top: 18px;
@@ -1151,9 +1156,9 @@
         }
         .cosmos-fullscreen-icon { font-size: 1rem; line-height: 1; }
         @media (max-width: 640px) {
-            .cosmos-toolbar { flex-wrap: wrap; }
+            .cosmos-toolbar { max-width:calc(100% - 28px); flex-wrap:wrap; }
             .cosmos-search-input { width: 45vw; }
-            .cosmos-search-status { width: 100%; }
+            .cosmos-search-status { display:none; }
             .cosmos-fullscreen-btn { top: auto; right: 14px; bottom: 14px; }
             .cosmos-fullscreen-label { display: none; }
             .cosmos-instruction-overlay { display: none; }
@@ -1564,7 +1569,8 @@
 
 }
     </style>
-<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script async src="https://unpkg.com/@supabase/supabase-js@2.57.4/dist/umd/supabase.min.js" onload="window.initializeSupabaseClient?.()"></script>
+<script async src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.4/dist/umd/supabase.min.js" onload="window.initializeSupabaseClient?.()"></script>
 </head>
 <body>
 
@@ -1691,13 +1697,17 @@
             <div class="cosmos-viewport-container" id="cosmos-box-container">
                 <canvas id="interactive-cosmos-canvas"></canvas>
                 <div class="cosmos-toolbar">
+                    <div class="cosmos-action-bar">
+                        <button id="cosmos-search-toggle" class="cosmos-icon-btn" type="button" onclick="toggleCosmosSearchTools()" aria-label="打开搜索工具" title="搜索与定位">⌕</button>
+                        <button id="cosmos-bridge-toggle" class="cosmos-icon-btn" type="button" onclick="toggleCosmosBridges()" aria-label="显示知识桥梁" aria-pressed="false" title="显示知识桥梁">⌁</button>
+                    </div>
                     <div class="cosmos-search-shell">
                         <input id="cosmos-search-input" class="cosmos-search-input" type="search" list="cosmos-book-options" placeholder="搜索书名或作者" onkeydown="handleCosmosSearchKey(event)">
                         <datalist id="cosmos-book-options"></datalist>
-                        <button class="cosmos-tool-btn" onclick="locateCosmosPlanet()">定位</button>
-                        <button class="cosmos-tool-btn" onclick="resetCosmosView()">重置</button>
+                        <button class="cosmos-tool-btn" onclick="locateCosmosPlanet()" title="定位书籍" aria-label="定位书籍">↗</button>
+                        <button class="cosmos-tool-btn" onclick="resetCosmosView()" title="重置宇宙视图" aria-label="重置宇宙视图">↺</button>
                     </div>
-                    <div class="cosmos-search-status" id="cosmos-search-status">按分类形成知识星系</div>
+                    <div class="cosmos-search-status" id="cosmos-search-status"></div>
                 </div>
                 <button
                     class="cosmos-fullscreen-btn"
@@ -2139,11 +2149,30 @@ const SUPABASE_URL =
 const SUPABASE_ANON_KEY =
 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind5eWNhdWFrcGhmc3ZraXlwbGxoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3MjE2MzMsImV4cCI6MjA5NzI5NzYzM30.-7WsBsPmI3uS25LtcZtIB2NUqq8olnw273ljGqNN64o';
 
-const supabaseClient =
-window.supabase.createClient(
-    SUPABASE_URL,
-    SUPABASE_ANON_KEY
-);
+let supabaseClient = null;
+
+async function initializeSupabaseClient() {
+    if (supabaseClient || !window.supabase) return;
+    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    if (document.readyState === 'loading') return;
+    const user = await getCurrentSupabaseUser();
+    if (user) await activateAuthenticatedShelf(user);
+    else if (!booksData.length) showGuestShelf();
+}
+
+async function getCurrentSupabaseUser() {
+    if (!supabaseClient) return null;
+    try {
+        const { data: { user } } = await supabaseClient.auth.getUser();
+        return user || null;
+    } catch (error) {
+        console.warn('Supabase 暂时无法连接，已保留访客书架。');
+        return null;
+    }
+}
+
+window.initializeSupabaseClient = initializeSupabaseClient;
+initializeSupabaseClient();
 
 console.log('Supabase Client Ready');
 
@@ -2196,6 +2225,10 @@ async function showLogin() {
 
 async function submitAuthForm(event) {
     event.preventDefault();
+    if (!supabaseClient) {
+        setAuthStatus('登录服务资源暂时未加载，请刷新页面后重试。', true);
+        return;
+    }
     const email = document.getElementById('auth-email').value.trim();
     const password = document.getElementById('auth-password').value;
     const button = document.getElementById('auth-submit-btn');
@@ -3277,6 +3310,8 @@ async function loadBookRelationships(user = currentUser) {
 
 (async () => {
 
+    if (!supabaseClient) return;
+
     const {
         data,
         error
@@ -3559,7 +3594,8 @@ async function loadBookRelationships(user = currentUser) {
         let cosmosState = {
             scale: 1.0, offsetX: 0, offsetY: 0, isDragging: false, startX: 0, startY: 0,
             planets: [], galaxies: [], hoveredPlanetIndex: null, focusedPlanetId: null,
-            animationFrameId: null, time: 0, isImmersive: false, viewBeforeImmersive: null
+            animationFrameId: null, time: 0, isImmersive: false, viewBeforeImmersive: null,
+            searchToolsVisible: false, bridgesVisible: false
         };
 
         const CATEGORY_MAP = {
@@ -3601,9 +3637,7 @@ function getCategoryStyle(cat) {
     'DOMContentLoaded',
     async () => {
 
-        const {
-            data: { user }
-        } = await supabaseClient.auth.getUser();
+        const user = await getCurrentSupabaseUser();
 
         currentUser = user || null;
 
@@ -5031,6 +5065,33 @@ async function ensureReadingInsightConsent() {
 
         function handleCosmosSearchKey(event) {
             if (event.key === 'Enter') locateCosmosPlanet();
+            if (event.key === 'Escape') toggleCosmosSearchTools(false);
+        }
+
+        function toggleCosmosSearchTools(forceVisible) {
+            const shell = document.querySelector('.cosmos-search-shell');
+            const button = document.getElementById('cosmos-search-toggle');
+            cosmosState.searchToolsVisible = typeof forceVisible === 'boolean'
+                ? forceVisible
+                : !cosmosState.searchToolsVisible;
+            shell?.classList.toggle('active', cosmosState.searchToolsVisible);
+            button?.classList.toggle('active', cosmosState.searchToolsVisible);
+            button?.setAttribute('aria-label', cosmosState.searchToolsVisible ? '关闭搜索工具' : '打开搜索工具');
+            if (cosmosState.searchToolsVisible) {
+                requestAnimationFrame(() => document.getElementById('cosmos-search-input')?.focus());
+            }
+        }
+
+        function toggleCosmosBridges(forceVisible) {
+            const button = document.getElementById('cosmos-bridge-toggle');
+            cosmosState.bridgesVisible = typeof forceVisible === 'boolean'
+                ? forceVisible
+                : !cosmosState.bridgesVisible;
+            button?.classList.toggle('active', cosmosState.bridgesVisible);
+            button?.setAttribute('aria-pressed', String(cosmosState.bridgesVisible));
+            button?.setAttribute('aria-label', cosmosState.bridgesVisible ? '隐藏知识桥梁' : '显示知识桥梁');
+            button?.setAttribute('title', cosmosState.bridgesVisible ? '隐藏知识桥梁' : '显示知识桥梁');
+            updateCosmosOverviewStatus();
         }
 
         function locateCosmosPlanet() {
@@ -5093,7 +5154,7 @@ async function ensureReadingInsightConsent() {
             });
 
             const planetById = new Map(cosmosState.planets.map(planet => [planet.id, planet]));
-            bookRelationships.forEach(relationship => {
+            if (cosmosState.bridgesVisible) bookRelationships.forEach(relationship => {
                 const source = planetById.get(relationship.sourceBookId);
                 const target = planetById.get(relationship.targetBookId);
                 if (!source || !target) return;
