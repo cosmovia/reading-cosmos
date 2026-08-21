@@ -4002,7 +4002,7 @@ function getCategoryStyle(cat) {
                 return;
             }
             preview.innerHTML = `
-                <img src="${escapeHtml(candidate.url)}" alt="低清候选封面预览">
+                <img src="${escapeHTML(candidate.url)}" alt="低清候选封面预览">
                 <div class="cover-candidate-copy">
                     <strong>仅找到低清封面（${candidate.width} × ${candidate.height}）</strong>
                     <span>可能在书架中显得模糊，请确认后使用。</span>
@@ -4098,25 +4098,30 @@ function getCategoryStyle(cat) {
             if (!requireAuthenticatedUser() || !activeBookId) return;
             const book = booksData.find(item => item.id === activeBookId);
             if (!book) return;
-            book.coverUrl = '';
-            lowResolutionCoverCandidates.delete(book.id);
-            attemptedBookCovers.delete(book.id);
-            setCoverEditStatus('正在重新匹配可信封面…');
-            await saveToLocalStorage();
-            const matched = await hydrateBookCover(book);
-            document.getElementById('detail-cover-url-input').value = getSafeBookCoverUrl(book.coverUrl);
-            document.getElementById('detail-cover-slot').innerHTML = createBookCover(book);
-            renderLowResolutionCoverCandidate(book.id);
-            renderShelfView();
-            const hasLowResolutionCandidate = lowResolutionCoverCandidates.has(book.id);
-            setCoverEditStatus(
-                matched
-                    ? '已匹配并同步封面。'
-                    : hasLowResolutionCandidate
-                        ? '仅找到低清封面，请预览后选择。'
-                        : `${book.coverMatchFailure || '未找到可信封面'}，已保留艺术封面。`,
-                !matched && !hasLowResolutionCandidate
-            );
+            try {
+                book.coverUrl = '';
+                lowResolutionCoverCandidates.delete(book.id);
+                attemptedBookCovers.delete(book.id);
+                setCoverEditStatus('正在重新匹配可信封面…');
+                await saveToLocalStorage();
+                const matched = await hydrateBookCover(book);
+                document.getElementById('detail-cover-url-input').value = getSafeBookCoverUrl(book.coverUrl);
+                document.getElementById('detail-cover-slot').innerHTML = createBookCover(book);
+                renderLowResolutionCoverCandidate(book.id);
+                renderShelfView();
+                const hasLowResolutionCandidate = lowResolutionCoverCandidates.has(book.id);
+                setCoverEditStatus(
+                    matched
+                        ? '已匹配并同步封面。'
+                        : hasLowResolutionCandidate
+                            ? '仅找到低清封面，请预览后选择。'
+                            : `${book.coverMatchFailure || '未找到可信封面'}，已保留艺术封面。`,
+                    !matched && !hasLowResolutionCandidate
+                );
+            } catch (error) {
+                console.error('自动匹配封面失败', error);
+                setCoverEditStatus('封面匹配未完成，请稍后重试。', true);
+            }
         }
 
         // 书架渲染（包含悬浮编辑与删除按钮）
