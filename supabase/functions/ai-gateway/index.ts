@@ -7,6 +7,7 @@ import {
 import {
   buildBookSearchQueries,
   buildGoogleBooksSearchParams,
+  isManagedBookCoverUrl,
   isLowResolutionGoogleBooksCover,
   safeBookCoverUrl,
   selectGoogleBooksCover,
@@ -271,6 +272,68 @@ async function findBookCover(title: string, author: string): Promise<{ url: stri
     }
   }
   return null;
+}
+
+function readRasterDimensions(bytes: Uint8Array, contentType: string): { width: number; height: number } | null {
+  if (contentType === "image/png" && bytes.length >= 24 && bytes[0] === 0x89 && bytes[1] === 0x50) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    return { width: view.getUint32(16), height: view.getUint32(20) };
+  }
+  if (contentType === "image/jpeg" && bytes.length >= 10 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+    const sofMarkers = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
+    let offset = 2;
+    while (offset + 8 < bytes.length) {
+      if (bytes[offset] !== 0xff) { offset += 1; continue; }
+      const marker = bytes[offset + 1];
+      if (marker === 0xd8 || marker === 0xd9) { offset += 2; continue; }
+      const length = (bytes[offset + 2] << 8) + bytes[offset + 3];
+      if (length < 2 || offset + 2 + length > bytes.length) break;
+      if (sofMarkers.has(marker)) {
+        return {
+          height: (bytes[offset + 5] << 8) + bytes[offset + 6],
+          width: (bytes[offset + 7] << 8) + bytes[offset + 8],
+        };
+      }
+      offset += 2 + length;
+    }
+  }
+  return null;
+}
+
+async function storeVerifiedBookCover(
+  adminClient: SupabaseClient<any, "public", any>,
+  userId: string,
+  bookId: string,
+  sourceUrl: string,
+): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch(sourceUrl, {
+      headers: { "User-Agent": "ReadingCosmos/1.0 (https://github.com/cosmovia/reading-cosmos)" },
+      signal: controller.signal,
+    });
+    if (!response.ok) return "";
+    const contentType = String(response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
+    if (!new Set(["image/jpeg", "image/png"]).has(contentType)) return "";
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.length < 4096 || bytes.length > 5 * 1024 * 1024) return "";
+    const dimensions = readRasterDimensions(bytes, contentType);
+    if (!dimensions || dimensions.width < 240 || dimensions.height < 300) return "";
+    const extension = contentType === "image/png" ? "png" : "jpg";
+    const objectPath = `${userId}/${bookId}.${extension}`;
+    const { error } = await adminClient.storage.from("book-covers").upload(objectPath, bytes, {
+      contentType,
+      cacheControl: "31536000",
+      upsert: true,
+    });
+    if (error) return "";
+    return adminClient.storage.from("book-covers").getPublicUrl(objectPath).data.publicUrl;
+  } catch {
+    return "";
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function sha256(value: string): Promise<string> {
@@ -768,21 +831,30 @@ Deno.serve(async (req: Request) => {
     }
     if (!book) return jsonResponse({ requestId, error: { code: "NOT_FOUND", message: "未找到这本书" } }, 404);
     const cachedUrl = safeBookCoverUrl(book.cover_url);
-    if (cachedUrl && !isLowResolutionGoogleBooksCover(cachedUrl)) {
+    if (cachedUrl && isManagedBookCoverUrl(cachedUrl)) {
       return jsonResponse({ requestId, cover: { url: cachedUrl, source: "cache", cacheHit: true } });
     }
     const cover = await findBookCover(String(book.title ?? ""), String(book.author ?? ""));
     if (!cover) {
       return jsonResponse({ requestId, cover: { url: null, source: null, cacheHit: false } });
     }
+    const storedCoverUrl = await storeVerifiedBookCover(
+      adminClient,
+      userData.user.id,
+      String(book.id),
+      cover.url,
+    );
+    if (!storedCoverUrl) {
+      return jsonResponse({ requestId, cover: { url: null, source: cover.source, cacheHit: false } });
+    }
     const { error: updateError } = await userClient
       .from("books")
-      .update({ cover_url: cover.url, updated_at: new Date().toISOString() })
+      .update({ cover_url: storedCoverUrl, updated_at: new Date().toISOString() })
       .eq("id", book.id);
     if (updateError) {
       return jsonResponse({ requestId, error: { code: "DATABASE", message: "暂时无法保存书籍封面" } }, 500);
     }
-    return jsonResponse({ requestId, cover: { ...cover, cacheHit: false } });
+    return jsonResponse({ requestId, cover: { url: storedCoverUrl, source: cover.source, cacheHit: false } });
   }
   if (!TASK_TYPES.includes(body.taskType as TaskType)) {
     return jsonResponse({ requestId, error: { code: "INVALID_REQUEST", message: "不支持的 AI 任务" } }, 400);
