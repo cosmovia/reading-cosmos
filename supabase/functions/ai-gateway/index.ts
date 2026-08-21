@@ -328,7 +328,8 @@ async function storeVerifiedBookCover(
       logRejection("content_type", { contentType });
       return { url: "", reason: "content_type" };
     }
-    const bytes = new Uint8Array(await response.arrayBuffer());
+    const arrayBuffer = await response.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
     if (bytes.length < 4096 || bytes.length > 5 * 1024 * 1024) {
       logRejection("file_size", { bytes: bytes.length });
       return { url: "", reason: "file_size" };
@@ -344,13 +345,13 @@ async function storeVerifiedBookCover(
       return { url: "", reason: "dimensions_too_small" };
     }
     const extension = contentType === "image/png" ? "png" : "jpg";
-    const objectPath = isLowResolution
-      ? `${userId}/${bookId}-candidate-${sourceName}.${extension}`
-      : `${userId}/${bookId}.${extension}`;
-    const { error } = await adminClient.storage.from("book-covers").upload(objectPath, bytes, {
+    const qualitySegment = isLowResolution ? `candidate-${sourceName}` : "verified";
+    const objectPath = `${userId}/${bookId}-${qualitySegment}-${crypto.randomUUID()}.${extension}`;
+    const fileBody = new Blob([arrayBuffer], { type: contentType });
+    const { error } = await adminClient.storage.from("book-covers").upload(objectPath, fileBody, {
       contentType,
       cacheControl: "31536000",
-      upsert: true,
+      upsert: false,
     });
     if (error) {
       logRejection("storage_upload", { message: error.message });
