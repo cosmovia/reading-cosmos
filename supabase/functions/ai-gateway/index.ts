@@ -259,19 +259,20 @@ async function findGoogleBooksCover(title: string, author: string): Promise<stri
   return "";
 }
 
-async function findBookCover(title: string, author: string): Promise<{ url: string; source: string } | null> {
+async function findBookCoverCandidates(title: string, author: string): Promise<Array<{ url: string; source: string }>> {
+  const candidates: Array<{ url: string; source: string }> = [];
   for (const source of [
     { name: "openlibrary", lookup: findOpenLibraryCover },
     { name: "google_books", lookup: findGoogleBooksCover },
   ]) {
     try {
       const url = await source.lookup(title, author);
-      if (url) return { url, source: source.name };
+      if (url) candidates.push({ url, source: source.name });
     } catch (error) {
       console.warn(`book cover source failed: ${source.name}`, error);
     }
   }
-  return null;
+  return candidates;
 }
 
 function readRasterDimensions(bytes: Uint8Array, contentType: string): { width: number; height: number } | null {
@@ -307,7 +308,7 @@ async function storeVerifiedBookCover(
   sourceUrl: string,
   sourceName: string,
   requestId: string,
-): Promise<string> {
+): Promise<{ url: string; reason: string }> {
   const logRejection = (reason: string, details: Record<string, unknown> = {}) => {
     console.warn("book cover rejected", { requestId, bookId, source: sourceName, reason, ...details });
   };
@@ -320,26 +321,26 @@ async function storeVerifiedBookCover(
     });
     if (!response.ok) {
       logRejection("source_http", { status: response.status });
-      return "";
+      return { url: "", reason: "source_http" };
     }
     const contentType = String(response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
     if (!new Set(["image/jpeg", "image/png"]).has(contentType)) {
       logRejection("content_type", { contentType });
-      return "";
+      return { url: "", reason: "content_type" };
     }
     const bytes = new Uint8Array(await response.arrayBuffer());
     if (bytes.length < 4096 || bytes.length > 5 * 1024 * 1024) {
       logRejection("file_size", { bytes: bytes.length });
-      return "";
+      return { url: "", reason: "file_size" };
     }
     const dimensions = readRasterDimensions(bytes, contentType);
     if (!dimensions) {
       logRejection("dimensions_unreadable", { contentType, bytes: bytes.length });
-      return "";
+      return { url: "", reason: "dimensions_unreadable" };
     }
     if (dimensions.width < 240 || dimensions.height < 300) {
       logRejection("dimensions_too_small", dimensions);
-      return "";
+      return { url: "", reason: "dimensions_too_small" };
     }
     const extension = contentType === "image/png" ? "png" : "jpg";
     const objectPath = `${userId}/${bookId}.${extension}`;
@@ -350,12 +351,15 @@ async function storeVerifiedBookCover(
     });
     if (error) {
       logRejection("storage_upload", { message: error.message });
-      return "";
+      return { url: "", reason: "storage_upload" };
     }
-    return adminClient.storage.from("book-covers").getPublicUrl(objectPath).data.publicUrl;
+    return {
+      url: adminClient.storage.from("book-covers").getPublicUrl(objectPath).data.publicUrl,
+      reason: "",
+    };
   } catch (error) {
     logRejection("fetch_exception", { message: error instanceof Error ? error.message : String(error) });
-    return "";
+    return { url: "", reason: "fetch_exception" };
   } finally {
     clearTimeout(timeout);
   }
@@ -859,20 +863,34 @@ Deno.serve(async (req: Request) => {
     if (cachedUrl && isManagedBookCoverUrl(cachedUrl)) {
       return jsonResponse({ requestId, cover: { url: cachedUrl, source: "cache", cacheHit: true } });
     }
-    const cover = await findBookCover(String(book.title ?? ""), String(book.author ?? ""));
-    if (!cover) {
-      return jsonResponse({ requestId, cover: { url: null, source: null, cacheHit: false } });
+    const coverCandidates = await findBookCoverCandidates(String(book.title ?? ""), String(book.author ?? ""));
+    if (coverCandidates.length === 0) {
+      return jsonResponse({ requestId, cover: { url: null, source: null, cacheHit: false, reason: "no_match" } });
     }
-    const storedCoverUrl = await storeVerifiedBookCover(
-      adminClient,
-      userData.user.id,
-      String(book.id),
-      cover.url,
-      cover.source,
-      requestId,
-    );
+    let storedCoverUrl = "";
+    let matchedSource: string | null = null;
+    let lastReason = "no_match";
+    for (const cover of coverCandidates) {
+      const stored = await storeVerifiedBookCover(
+        adminClient,
+        userData.user.id,
+        String(book.id),
+        cover.url,
+        cover.source,
+        requestId,
+      );
+      if (stored.url) {
+        storedCoverUrl = stored.url;
+        matchedSource = cover.source;
+        break;
+      }
+      lastReason = stored.reason || lastReason;
+    }
     if (!storedCoverUrl) {
-      return jsonResponse({ requestId, cover: { url: null, source: cover.source, cacheHit: false } });
+      return jsonResponse({
+        requestId,
+        cover: { url: null, source: null, cacheHit: false, reason: lastReason },
+      });
     }
     const { error: updateError } = await userClient
       .from("books")
@@ -881,7 +899,7 @@ Deno.serve(async (req: Request) => {
     if (updateError) {
       return jsonResponse({ requestId, error: { code: "DATABASE", message: "暂时无法保存书籍封面" } }, 500);
     }
-    return jsonResponse({ requestId, cover: { url: storedCoverUrl, source: cover.source, cacheHit: false } });
+    return jsonResponse({ requestId, cover: { url: storedCoverUrl, source: matchedSource, cacheHit: false } });
   }
   if (!TASK_TYPES.includes(body.taskType as TaskType)) {
     return jsonResponse({ requestId, error: { code: "INVALID_REQUEST", message: "不支持的 AI 任务" } }, 400);

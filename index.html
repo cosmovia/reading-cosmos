@@ -3920,11 +3920,23 @@ function getCategoryStyle(cat) {
 
             const coverUrl = getSafeBookCoverUrl(data?.cover?.url);
             if (!coverUrl || isLowResolutionGoogleBooksCover(coverUrl)) {
-                showAIStatus('未找到可信的书籍封面，已保留当前艺术封面', 'warning', 5000);
+                const reasonMessages = {
+                    no_match: '未检索到与书名和作者匹配的封面',
+                    source_http: '封面来源暂时无法访问',
+                    fetch_exception: '封面来源连接失败',
+                    content_type: '候选封面格式不受支持',
+                    file_size: '候选封面文件异常',
+                    dimensions_unreadable: '无法确认候选封面的清晰度',
+                    dimensions_too_small: '候选封面清晰度不足',
+                    storage_upload: '封面暂时无法保存到云端'
+                };
+                book.coverMatchFailure = reasonMessages[data?.cover?.reason] || '未找到可信的书籍封面';
+                showAIStatus(`${book.coverMatchFailure}，已保留当前艺术封面`, 'warning', 5000);
                 return false;
             }
 
             book.coverUrl = coverUrl;
+            delete book.coverMatchFailure;
             try {
                 localStorage.setItem(
                     `reading_cosmos_data_store:${currentUser.id}`,
@@ -4015,7 +4027,7 @@ function getCategoryStyle(cat) {
             document.getElementById('detail-cover-url-input').value = getSafeBookCoverUrl(book.coverUrl);
             document.getElementById('detail-cover-slot').innerHTML = createBookCover(book);
             renderShelfView();
-            setCoverEditStatus(matched ? '已匹配并同步封面。' : '未找到可信封面，已保留艺术封面。', !matched);
+            setCoverEditStatus(matched ? '已匹配并同步封面。' : `${book.coverMatchFailure || '未找到可信封面'}，已保留艺术封面。`, !matched);
         }
 
         // 书架渲染（包含悬浮编辑与删除按钮）
