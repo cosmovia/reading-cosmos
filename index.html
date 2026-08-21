@@ -2162,13 +2162,18 @@ const SUPABASE_ANON_KEY =
 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind5eWNhdWFrcGhmc3ZraXlwbGxoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3MjE2MzMsImV4cCI6MjA5NzI5NzYzM30.-7WsBsPmI3uS25LtcZtIB2NUqq8olnw273ljGqNN64o';
 
 let supabaseClient = null;
+let supabaseClientSource = null;
+const SUPABASE_OFFICIAL_SDK_WAIT_MS = 3000;
+const supabaseClientWaitStartedAt = Date.now();
 
-async function initializeSupabaseClient() {
+async function initializeSupabaseClient({ allowFallback = false } = {}) {
     if (supabaseClient) return;
     if (window.supabase) {
         supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-    } else if (window.createReadingCosmosSupabaseFallback) {
+        supabaseClientSource = 'official';
+    } else if (allowFallback && window.createReadingCosmosSupabaseFallback) {
         supabaseClient = window.createReadingCosmosSupabaseFallback(SUPABASE_URL, SUPABASE_ANON_KEY);
+        supabaseClientSource = 'fallback';
     } else {
         return;
     }
@@ -2191,13 +2196,21 @@ async function getCurrentSupabaseUser() {
 
 window.initializeSupabaseClient = initializeSupabaseClient;
 initializeSupabaseClient();
+window.setTimeout(
+    () => initializeSupabaseClient({ allowFallback: true }),
+    SUPABASE_OFFICIAL_SDK_WAIT_MS
+);
 
 function waitForSupabaseClient(timeoutMs = 12000) {
     if (supabaseClient) return Promise.resolve(true);
     const startedAt = Date.now();
     return new Promise(resolve => {
         const timer = window.setInterval(() => {
-            if (window.supabase && !supabaseClient) initializeSupabaseClient();
+            if (!supabaseClient) {
+                const allowFallback =
+                    Date.now() - supabaseClientWaitStartedAt >= SUPABASE_OFFICIAL_SDK_WAIT_MS;
+                initializeSupabaseClient({ allowFallback });
+            }
             if (supabaseClient || Date.now() - startedAt >= timeoutMs) {
                 window.clearInterval(timer);
                 resolve(Boolean(supabaseClient));
@@ -2206,7 +2219,7 @@ function waitForSupabaseClient(timeoutMs = 12000) {
     });
 }
 
-console.log('Supabase Client Ready');
+console.log('Supabase client initialization scheduled');
 
 // =============================
 // 注册
