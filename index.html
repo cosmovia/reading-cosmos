@@ -3919,7 +3919,7 @@ function getCategoryStyle(cat) {
             }
 
             const coverUrl = getSafeBookCoverUrl(data?.cover?.url);
-            if (!coverUrl) {
+            if (!coverUrl || isLowResolutionGoogleBooksCover(coverUrl)) {
                 showAIStatus('未找到可信的书籍封面，已保留当前艺术封面', 'warning', 5000);
                 return false;
             }

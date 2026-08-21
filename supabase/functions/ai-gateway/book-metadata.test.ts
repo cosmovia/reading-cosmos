@@ -52,7 +52,7 @@ Deno.test("Google Books cover selection prefers only explicitly available high r
   });
   assert(selected === medium, "medium cover was not preferred over thumbnail");
   const thumbnail = "https://books.google.com/books/content?id=1&zoom=1";
-  assert(selectGoogleBooksCover({ thumbnail }) === thumbnail, "thumbnail URL was modified speculatively");
+  assert(selectGoogleBooksCover({ thumbnail }) === "", "low resolution thumbnail was accepted as a successful match");
   assert(isLowResolutionGoogleBooksCover("https://books.google.com/books/content?id=1&zoom=1"), "low resolution cache was not detected");
   assert(!isLowResolutionGoogleBooksCover(medium), "high resolution cover was marked as low resolution");
 });

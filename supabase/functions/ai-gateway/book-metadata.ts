@@ -34,7 +34,7 @@ export function buildGoogleBooksSearchParams(
     q,
     maxResults: "10",
     printType: "books",
-    projection: "lite",
+    projection: "full",
   });
   const normalizedApiKey = String(apiKey ?? "").trim();
   if (normalizedApiKey) params.set("key", normalizedApiKey);
@@ -65,7 +65,7 @@ export function selectGoogleBooksCover(imageLinks: unknown): string {
   const links = imageLinks as Record<string, unknown>;
   for (const size of ["extraLarge", "large", "medium", "small", "thumbnail", "smallThumbnail"]) {
     const coverUrl = safeBookCoverUrl(links[size]);
-    if (!coverUrl) continue;
+    if (!coverUrl || isLowResolutionGoogleBooksCover(coverUrl)) continue;
     return coverUrl;
   }
   return "";
