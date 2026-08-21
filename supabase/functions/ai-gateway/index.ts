@@ -372,6 +372,34 @@ async function storeVerifiedBookCover(
   }
 }
 
+async function clearBookCoverCandidates(
+  adminClient: SupabaseClient<any, "public", any>,
+  userId: string,
+  bookId: string,
+  requestId: string,
+): Promise<void> {
+  const prefix = `${bookId}-candidate-`;
+  try {
+    const { data, error } = await adminClient.storage.from("book-covers").list(userId, {
+      limit: 100,
+      search: prefix,
+    });
+    if (error) throw error;
+    const paths = (data ?? [])
+      .filter((file) => String(file.name || "").startsWith(prefix))
+      .map((file) => `${userId}/${file.name}`);
+    if (paths.length === 0) return;
+    const { error: removeError } = await adminClient.storage.from("book-covers").remove(paths);
+    if (removeError) throw removeError;
+  } catch (error) {
+    console.warn("book cover candidate cleanup failed", {
+      requestId,
+      bookId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 async function sha256(value: string): Promise<string> {
   const bytes = new TextEncoder().encode(value);
   const digest = await crypto.subtle.digest("SHA-256", bytes);
@@ -878,6 +906,7 @@ Deno.serve(async (req: Request) => {
     let matchedSource: string | null = null;
     let lastReason = "no_match";
     let bestLowResolution: { url: string; source: string; width: number; height: number } | null = null;
+    await clearBookCoverCandidates(adminClient, userData.user.id, String(book.id), requestId);
     for (const cover of coverCandidates) {
       const stored = await storeVerifiedBookCover(
         adminClient,
@@ -890,6 +919,7 @@ Deno.serve(async (req: Request) => {
       if (stored.url && stored.quality === "high") {
         storedCoverUrl = stored.url;
         matchedSource = cover.source;
+        await clearBookCoverCandidates(adminClient, userData.user.id, String(book.id), requestId);
         break;
       }
       if (stored.url && stored.quality === "low") {
