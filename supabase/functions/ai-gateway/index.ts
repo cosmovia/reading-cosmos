@@ -308,7 +308,7 @@ async function storeVerifiedBookCover(
   sourceUrl: string,
   sourceName: string,
   requestId: string,
-): Promise<{ url: string; reason: string }> {
+): Promise<{ url: string; reason: string; quality?: "high" | "low"; width?: number; height?: number }> {
   const logRejection = (reason: string, details: Record<string, unknown> = {}) => {
     console.warn("book cover rejected", { requestId, bookId, source: sourceName, reason, ...details });
   };
@@ -338,12 +338,15 @@ async function storeVerifiedBookCover(
       logRejection("dimensions_unreadable", { contentType, bytes: bytes.length });
       return { url: "", reason: "dimensions_unreadable" };
     }
-    if (dimensions.width < 240 || dimensions.height < 300) {
+    const isLowResolution = dimensions.width < 240 || dimensions.height < 300;
+    if (isLowResolution && (dimensions.width < 100 || dimensions.height < 140)) {
       logRejection("dimensions_too_small", dimensions);
       return { url: "", reason: "dimensions_too_small" };
     }
     const extension = contentType === "image/png" ? "png" : "jpg";
-    const objectPath = `${userId}/${bookId}.${extension}`;
+    const objectPath = isLowResolution
+      ? `${userId}/${bookId}-candidate-${sourceName}.${extension}`
+      : `${userId}/${bookId}.${extension}`;
     const { error } = await adminClient.storage.from("book-covers").upload(objectPath, bytes, {
       contentType,
       cacheControl: "31536000",
@@ -355,7 +358,10 @@ async function storeVerifiedBookCover(
     }
     return {
       url: adminClient.storage.from("book-covers").getPublicUrl(objectPath).data.publicUrl,
-      reason: "",
+      reason: isLowResolution ? "dimensions_too_small" : "",
+      quality: isLowResolution ? "low" : "high",
+      width: dimensions.width,
+      height: dimensions.height,
     };
   } catch (error) {
     logRejection("fetch_exception", { message: error instanceof Error ? error.message : String(error) });
@@ -870,6 +876,7 @@ Deno.serve(async (req: Request) => {
     let storedCoverUrl = "";
     let matchedSource: string | null = null;
     let lastReason = "no_match";
+    let bestLowResolution: { url: string; source: string; width: number; height: number } | null = null;
     for (const cover of coverCandidates) {
       const stored = await storeVerifiedBookCover(
         adminClient,
@@ -879,14 +886,40 @@ Deno.serve(async (req: Request) => {
         cover.source,
         requestId,
       );
-      if (stored.url) {
+      if (stored.url && stored.quality === "high") {
         storedCoverUrl = stored.url;
         matchedSource = cover.source;
         break;
       }
+      if (stored.url && stored.quality === "low") {
+        const lowCandidate = {
+          url: stored.url,
+          source: cover.source,
+          width: Number(stored.width || 0),
+          height: Number(stored.height || 0),
+        };
+        if (!bestLowResolution || lowCandidate.width * lowCandidate.height > bestLowResolution.width * bestLowResolution.height) {
+          bestLowResolution = lowCandidate;
+        }
+      }
       lastReason = stored.reason || lastReason;
     }
     if (!storedCoverUrl) {
+      if (bestLowResolution) {
+        return jsonResponse({
+          requestId,
+          cover: {
+            url: bestLowResolution.url,
+            source: bestLowResolution.source,
+            cacheHit: false,
+            quality: "low",
+            requiresConfirmation: true,
+            width: bestLowResolution.width,
+            height: bestLowResolution.height,
+            reason: "dimensions_too_small",
+          },
+        });
+      }
       return jsonResponse({
         requestId,
         cover: { url: null, source: null, cacheHit: false, reason: lastReason },
