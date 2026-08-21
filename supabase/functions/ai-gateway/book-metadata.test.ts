@@ -1,6 +1,7 @@
 import {
   buildBookSearchQueries,
   buildGoogleBooksSearchParams,
+  isManagedBookCoverUrl,
   isLowResolutionGoogleBooksCover,
   normalizeBookMetadata,
   safeBookCoverUrl,
@@ -24,6 +25,14 @@ Deno.test("cover URLs are restricted to known HTTPS image hosts", () => {
   assert(
     safeBookCoverUrl("https://books.google.co.kr/books/content?id=1").startsWith("https://"),
     "regional Google Books cover was rejected",
+  );
+  assert(
+    safeBookCoverUrl("https://project.supabase.co/storage/v1/object/public/book-covers/user/book.jpg").startsWith("https://"),
+    "managed Supabase Storage cover was rejected",
+  );
+  assert(
+    isManagedBookCoverUrl("https://project.supabase.co/storage/v1/object/public/book-covers/user/book.jpg"),
+    "managed cover URL was not recognized",
   );
   assert(safeBookCoverUrl("https://example.com/cover.jpg") === "", "unknown cover host was accepted");
   assert(safeBookCoverUrl("javascript:alert(1)") === "", "unsafe cover protocol was accepted");
@@ -52,7 +61,7 @@ Deno.test("Google Books cover selection prefers only explicitly available high r
   });
   assert(selected === medium, "medium cover was not preferred over thumbnail");
   const thumbnail = "https://books.google.com/books/content?id=1&zoom=1";
-  assert(selectGoogleBooksCover({ thumbnail }) === thumbnail, "thumbnail URL was modified speculatively");
+  assert(selectGoogleBooksCover({ thumbnail }) === "", "low resolution thumbnail was accepted as a successful match");
   assert(isLowResolutionGoogleBooksCover("https://books.google.com/books/content?id=1&zoom=1"), "low resolution cache was not detected");
   assert(!isLowResolutionGoogleBooksCover(medium), "high resolution cover was marked as low resolution");
 });

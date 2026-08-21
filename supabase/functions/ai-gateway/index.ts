@@ -7,6 +7,7 @@ import {
 import {
   buildBookSearchQueries,
   buildGoogleBooksSearchParams,
+  isManagedBookCoverUrl,
   isLowResolutionGoogleBooksCover,
   safeBookCoverUrl,
   selectGoogleBooksCover,
@@ -258,19 +259,145 @@ async function findGoogleBooksCover(title: string, author: string): Promise<stri
   return "";
 }
 
-async function findBookCover(title: string, author: string): Promise<{ url: string; source: string } | null> {
+async function findBookCoverCandidates(title: string, author: string): Promise<Array<{ url: string; source: string }>> {
+  const candidates: Array<{ url: string; source: string }> = [];
   for (const source of [
     { name: "openlibrary", lookup: findOpenLibraryCover },
     { name: "google_books", lookup: findGoogleBooksCover },
   ]) {
     try {
       const url = await source.lookup(title, author);
-      if (url) return { url, source: source.name };
+      if (url) candidates.push({ url, source: source.name });
     } catch (error) {
       console.warn(`book cover source failed: ${source.name}`, error);
     }
   }
+  return candidates;
+}
+
+function readRasterDimensions(bytes: Uint8Array, contentType: string): { width: number; height: number } | null {
+  if (contentType === "image/png" && bytes.length >= 24 && bytes[0] === 0x89 && bytes[1] === 0x50) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    return { width: view.getUint32(16), height: view.getUint32(20) };
+  }
+  if (contentType === "image/jpeg" && bytes.length >= 10 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+    const sofMarkers = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
+    let offset = 2;
+    while (offset + 8 < bytes.length) {
+      if (bytes[offset] !== 0xff) { offset += 1; continue; }
+      const marker = bytes[offset + 1];
+      if (marker === 0xd8 || marker === 0xd9) { offset += 2; continue; }
+      const length = (bytes[offset + 2] << 8) + bytes[offset + 3];
+      if (length < 2 || offset + 2 + length > bytes.length) break;
+      if (sofMarkers.has(marker)) {
+        return {
+          height: (bytes[offset + 5] << 8) + bytes[offset + 6],
+          width: (bytes[offset + 7] << 8) + bytes[offset + 8],
+        };
+      }
+      offset += 2 + length;
+    }
+  }
   return null;
+}
+
+async function storeVerifiedBookCover(
+  adminClient: SupabaseClient<any, "public", any>,
+  userId: string,
+  bookId: string,
+  sourceUrl: string,
+  sourceName: string,
+  requestId: string,
+): Promise<{ url: string; reason: string; quality?: "high" | "low"; width?: number; height?: number }> {
+  const logRejection = (reason: string, details: Record<string, unknown> = {}) => {
+    console.warn("book cover rejected", { requestId, bookId, source: sourceName, reason, ...details });
+  };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch(sourceUrl, {
+      headers: { "User-Agent": "ReadingCosmos/1.0 (https://github.com/cosmovia/reading-cosmos)" },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      logRejection("source_http", { status: response.status });
+      return { url: "", reason: "source_http" };
+    }
+    const contentType = String(response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
+    if (!new Set(["image/jpeg", "image/png"]).has(contentType)) {
+      logRejection("content_type", { contentType });
+      return { url: "", reason: "content_type" };
+    }
+    const arrayBuffer = await response.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+    if (bytes.length < 4096 || bytes.length > 5 * 1024 * 1024) {
+      logRejection("file_size", { bytes: bytes.length });
+      return { url: "", reason: "file_size" };
+    }
+    const dimensions = readRasterDimensions(bytes, contentType);
+    if (!dimensions) {
+      logRejection("dimensions_unreadable", { contentType, bytes: bytes.length });
+      return { url: "", reason: "dimensions_unreadable" };
+    }
+    const isLowResolution = dimensions.width < 240 || dimensions.height < 300;
+    if (isLowResolution && (dimensions.width < 100 || dimensions.height < 140)) {
+      logRejection("dimensions_too_small", dimensions);
+      return { url: "", reason: "dimensions_too_small" };
+    }
+    const extension = contentType === "image/png" ? "png" : "jpg";
+    const qualitySegment = isLowResolution ? `candidate-${sourceName}` : "verified";
+    const objectPath = `${userId}/${bookId}-${qualitySegment}-${crypto.randomUUID()}.${extension}`;
+    const fileBody = new Blob([arrayBuffer], { type: contentType });
+    const { error } = await adminClient.storage.from("book-covers").upload(objectPath, fileBody, {
+      contentType,
+      cacheControl: "31536000",
+      upsert: false,
+    });
+    if (error) {
+      logRejection("storage_upload", { message: error.message });
+      return { url: "", reason: "storage_upload" };
+    }
+    return {
+      url: adminClient.storage.from("book-covers").getPublicUrl(objectPath).data.publicUrl,
+      reason: isLowResolution ? "dimensions_too_small" : "",
+      quality: isLowResolution ? "low" : "high",
+      width: dimensions.width,
+      height: dimensions.height,
+    };
+  } catch (error) {
+    logRejection("fetch_exception", { message: error instanceof Error ? error.message : String(error) });
+    return { url: "", reason: "fetch_exception" };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function clearBookCoverCandidates(
+  adminClient: SupabaseClient<any, "public", any>,
+  userId: string,
+  bookId: string,
+  requestId: string,
+): Promise<void> {
+  const prefix = `${bookId}-candidate-`;
+  try {
+    const { data, error } = await adminClient.storage.from("book-covers").list(userId, {
+      limit: 100,
+      search: prefix,
+    });
+    if (error) throw error;
+    const paths = (data ?? [])
+      .filter((file) => String(file.name || "").startsWith(prefix))
+      .map((file) => `${userId}/${file.name}`);
+    if (paths.length === 0) return;
+    const { error: removeError } = await adminClient.storage.from("book-covers").remove(paths);
+    if (removeError) throw removeError;
+  } catch (error) {
+    console.warn("book cover candidate cleanup failed", {
+      requestId,
+      bookId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 async function sha256(value: string): Promise<string> {
@@ -768,21 +895,75 @@ Deno.serve(async (req: Request) => {
     }
     if (!book) return jsonResponse({ requestId, error: { code: "NOT_FOUND", message: "未找到这本书" } }, 404);
     const cachedUrl = safeBookCoverUrl(book.cover_url);
-    if (cachedUrl && !isLowResolutionGoogleBooksCover(cachedUrl)) {
+    if (cachedUrl && isManagedBookCoverUrl(cachedUrl)) {
       return jsonResponse({ requestId, cover: { url: cachedUrl, source: "cache", cacheHit: true } });
     }
-    const cover = await findBookCover(String(book.title ?? ""), String(book.author ?? ""));
-    if (!cover) {
-      return jsonResponse({ requestId, cover: { url: null, source: null, cacheHit: false } });
+    const coverCandidates = await findBookCoverCandidates(String(book.title ?? ""), String(book.author ?? ""));
+    if (coverCandidates.length === 0) {
+      return jsonResponse({ requestId, cover: { url: null, source: null, cacheHit: false, reason: "no_match" } });
+    }
+    let storedCoverUrl = "";
+    let matchedSource: string | null = null;
+    let lastReason = "no_match";
+    let bestLowResolution: { url: string; source: string; width: number; height: number } | null = null;
+    await clearBookCoverCandidates(adminClient, userData.user.id, String(book.id), requestId);
+    for (const cover of coverCandidates) {
+      const stored = await storeVerifiedBookCover(
+        adminClient,
+        userData.user.id,
+        String(book.id),
+        cover.url,
+        cover.source,
+        requestId,
+      );
+      if (stored.url && stored.quality === "high") {
+        storedCoverUrl = stored.url;
+        matchedSource = cover.source;
+        await clearBookCoverCandidates(adminClient, userData.user.id, String(book.id), requestId);
+        break;
+      }
+      if (stored.url && stored.quality === "low") {
+        const lowCandidate = {
+          url: stored.url,
+          source: cover.source,
+          width: Number(stored.width || 0),
+          height: Number(stored.height || 0),
+        };
+        if (!bestLowResolution || lowCandidate.width * lowCandidate.height > bestLowResolution.width * bestLowResolution.height) {
+          bestLowResolution = lowCandidate;
+        }
+      }
+      lastReason = stored.reason || lastReason;
+    }
+    if (!storedCoverUrl) {
+      if (bestLowResolution) {
+        return jsonResponse({
+          requestId,
+          cover: {
+            url: bestLowResolution.url,
+            source: bestLowResolution.source,
+            cacheHit: false,
+            quality: "low",
+            requiresConfirmation: true,
+            width: bestLowResolution.width,
+            height: bestLowResolution.height,
+            reason: "dimensions_too_small",
+          },
+        });
+      }
+      return jsonResponse({
+        requestId,
+        cover: { url: null, source: null, cacheHit: false, reason: lastReason },
+      });
     }
     const { error: updateError } = await userClient
       .from("books")
-      .update({ cover_url: cover.url, updated_at: new Date().toISOString() })
+      .update({ cover_url: storedCoverUrl, updated_at: new Date().toISOString() })
       .eq("id", book.id);
     if (updateError) {
       return jsonResponse({ requestId, error: { code: "DATABASE", message: "暂时无法保存书籍封面" } }, 500);
     }
-    return jsonResponse({ requestId, cover: { ...cover, cacheHit: false } });
+    return jsonResponse({ requestId, cover: { url: storedCoverUrl, source: matchedSource, cacheHit: false } });
   }
   if (!TASK_TYPES.includes(body.taskType as TaskType)) {
     return jsonResponse({ requestId, error: { code: "INVALID_REQUEST", message: "不支持的 AI 任务" } }, 400);

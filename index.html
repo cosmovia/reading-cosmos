@@ -517,6 +517,23 @@
             line-height: 1.45;
         }
 
+        .cover-candidate-preview {
+            display: none;
+            gap: 10px;
+            align-items: center;
+            padding: 10px;
+            border: 1px solid rgba(100, 116, 139, 0.18);
+            border-radius: 10px;
+            background: rgba(248, 250, 252, 0.78);
+        }
+
+        .cover-candidate-preview.visible { display: flex; }
+        .cover-candidate-preview img { width: 54px; height: 76px; object-fit: cover; border-radius: 6px; }
+        .cover-candidate-copy { display: grid; gap: 6px; min-width: 0; font-size: 0.7rem; color: #64748b; }
+        .cover-candidate-copy strong { color: #334155; font-size: 0.74rem; }
+        .cover-candidate-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+        .cover-candidate-actions .cover-edit-btn { padding: 6px 8px; }
+
         .book-card {
             background: transparent;
             cursor: pointer;
@@ -582,7 +599,7 @@
             width: 100%;
             height: 100%;
             object-fit: cover;
-            background: #eef2f7;
+            background: transparent;
         }
 
         /* 艺术感封面 */
@@ -1119,13 +1136,18 @@
             display: block;
         }
 
-        .cosmos-toolbar { position: absolute; top: 18px; left: 18px; right: 18px; z-index: 55; display: flex; align-items: center; gap: 10px; pointer-events: none; }
-        .cosmos-search-shell { display: flex; align-items: center; gap: 6px; padding: 5px; border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 12px; background: rgba(2, 6, 23, 0.48); backdrop-filter: blur(14px); box-shadow: 0 8px 24px rgba(2, 6, 23, 0.16); pointer-events: auto; }
+        .cosmos-toolbar { position: absolute; top: 18px; left: 18px; z-index: 55; display: flex; align-items: flex-start; gap: 8px; pointer-events: none; }
+        .cosmos-action-bar { display:flex; gap:6px; padding:4px; border:1px solid rgba(148, 163, 184, 0.16); border-radius:12px; background:rgba(2, 6, 23, 0.4); backdrop-filter:blur(14px); pointer-events:auto; }
+        .cosmos-icon-btn { width:34px; height:34px; display:grid; place-items:center; border:0; border-radius:9px; background:transparent; color:#94a3b8; font-size:1rem; cursor:pointer; }
+        .cosmos-icon-btn:hover, .cosmos-icon-btn.active { color:#e0f2fe; background:rgba(14, 165, 233, 0.2); }
+        .cosmos-search-shell { display: none; align-items: center; gap: 6px; padding: 5px; border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 12px; background: rgba(2, 6, 23, 0.48); backdrop-filter: blur(14px); box-shadow: 0 8px 24px rgba(2, 6, 23, 0.16); pointer-events: auto; }
+        .cosmos-search-shell.active { display:flex; }
         .cosmos-search-input { width: min(190px, 34vw); border: none; outline: none; background: transparent; color: #e2e8f0; padding: 5px 7px; font-size: 0.8rem; }
         .cosmos-search-input::placeholder { color: #64748b; }
         .cosmos-tool-btn { border: 1px solid rgba(125, 211, 252, 0.18); border-radius: 9px; background: rgba(14, 165, 233, 0.12); color: #bae6fd; padding: 7px 10px; font-size: 0.78rem; cursor: pointer; white-space: nowrap; }
         .cosmos-tool-btn:hover { background: rgba(14, 165, 233, 0.24); }
-        .cosmos-search-status { color: #94a3b8; font-size: 0.76rem; pointer-events: none; }
+        .cosmos-search-status { display:none; color: #94a3b8; font-size: 0.72rem; pointer-events: none; max-width:180px; }
+        .cosmos-search-shell.active + .cosmos-search-status { display:block; }
         .cosmos-fullscreen-btn {
             position: absolute;
             top: 18px;
@@ -1151,26 +1173,19 @@
         }
         .cosmos-fullscreen-icon { font-size: 1rem; line-height: 1; }
         @media (max-width: 640px) {
-            .cosmos-toolbar { flex-wrap: wrap; }
+            .cosmos-toolbar { max-width:calc(100% - 28px); flex-wrap:wrap; }
             .cosmos-search-input { width: 45vw; }
-            .cosmos-search-status { width: 100%; }
+            .cosmos-search-status { display:none; }
             .cosmos-fullscreen-btn { top: auto; right: 14px; bottom: 14px; }
             .cosmos-fullscreen-label { display: none; }
-            .cosmos-instruction-overlay { display: none; }
+            .cosmos-instruction-note { display: none; }
         }
 
-        .cosmos-instruction-overlay {
-            position: absolute;
-            bottom: 20px;
-            left: 20px;
-            background: rgba(15, 23, 42, 0.6);
-            backdrop-filter: blur(8px);
-            padding: 8px 16px;
-            border-radius: 8px;
-            border: 1px solid rgba(255,255,255,0.1);
+        .cosmos-instruction-note {
+            margin: 10px 4px 0;
             font-size: 0.75rem;
-            color: #94a3b8;
-            pointer-events: none;
+            color: #64748b;
+            text-align: left;
         }
 
         .planet-popover-card {
@@ -1564,7 +1579,9 @@
 
 }
     </style>
-<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="./supabase-fallback.js"></script>
+<script async src="https://unpkg.com/@supabase/supabase-js@2.57.4/dist/umd/supabase.min.js" onload="window.initializeSupabaseClient?.()"></script>
+<script async src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.4/dist/umd/supabase.min.js" onload="window.initializeSupabaseClient?.()"></script>
 </head>
 <body>
 
@@ -1691,13 +1708,17 @@
             <div class="cosmos-viewport-container" id="cosmos-box-container">
                 <canvas id="interactive-cosmos-canvas"></canvas>
                 <div class="cosmos-toolbar">
+                    <div class="cosmos-action-bar">
+                        <button id="cosmos-search-toggle" class="cosmos-icon-btn" type="button" onclick="toggleCosmosSearchTools()" aria-label="打开搜索工具" title="搜索与定位">⌕</button>
+                        <button id="cosmos-bridge-toggle" class="cosmos-icon-btn" type="button" onclick="toggleCosmosBridges()" aria-label="显示知识桥梁" aria-pressed="false" title="显示知识桥梁">⌁</button>
+                    </div>
                     <div class="cosmos-search-shell">
                         <input id="cosmos-search-input" class="cosmos-search-input" type="search" list="cosmos-book-options" placeholder="搜索书名或作者" onkeydown="handleCosmosSearchKey(event)">
                         <datalist id="cosmos-book-options"></datalist>
-                        <button class="cosmos-tool-btn" onclick="locateCosmosPlanet()">定位</button>
-                        <button class="cosmos-tool-btn" onclick="resetCosmosView()">重置</button>
+                        <button class="cosmos-tool-btn" onclick="locateCosmosPlanet()" title="定位书籍" aria-label="定位书籍">↗</button>
+                        <button class="cosmos-tool-btn" onclick="resetCosmosView()" title="重置宇宙视图" aria-label="重置宇宙视图">↺</button>
                     </div>
-                    <div class="cosmos-search-status" id="cosmos-search-status">按分类形成知识星系</div>
+                    <div class="cosmos-search-status" id="cosmos-search-status"></div>
                 </div>
                 <button
                     class="cosmos-fullscreen-btn"
@@ -1710,7 +1731,6 @@
                     <span class="cosmos-fullscreen-icon" id="cosmos-fullscreen-icon" aria-hidden="true">⤢</span>
                     <span class="cosmos-fullscreen-label" id="cosmos-fullscreen-label">全屏</span>
                 </button>
-                <div class="cosmos-instruction-overlay">🔮 提示：支持鼠标拖拽平移、滚轮缩放、点击星球查看详情。</div>
                 <div class="planet-popover-card" id="planet-popover">
                     <div class="popover-flex">
                         <div class="popover-cover" id="pop-cover-slot"></div>
@@ -1728,6 +1748,7 @@
                     </div>
                 </div>
             </div>
+            <div class="cosmos-instruction-note">提示：支持鼠标拖拽平移、滚轮缩放、点击星球查看详情。</div>
         </section>
 
        <section id="view-insights" class="view-section">
@@ -1896,6 +1917,10 @@
                     <option value="rat">R-A-T · 共鸣、提炼、转化</option>
                 </select>
             </div>
+            <div class="form-group">
+                <label for="input-finished-at">阅读完成日期（可选）</label>
+                <input type="date" id="input-finished-at" class="form-input">
+            </div>
             <div class="modal-buttons">
                 <button class="btn-secondary" onclick="closeAddBookModal()" style="background:#f1f5f9; border:none; padding:10px 16px; border-radius:8px; cursor:pointer;">取消</button>
                 <button class="btn-primary" onclick="submitAddBook()">启动构筑</button>
@@ -1970,6 +1995,7 @@
                         <button class="cover-edit-btn" type="button" onclick="retryAutomaticBookCover()">自动匹配</button>
                         <button class="cover-edit-btn" type="button" onclick="restoreArtworkBookCover()">艺术封面</button>
                     </div>
+                    <div class="cover-candidate-preview" id="cover-candidate-preview"></div>
                     <div class="cover-edit-status" id="cover-edit-status" role="status"></div>
                 </div>
                 <h2 class="detail-title" id="detail-title-slot">书名</h2>
@@ -2011,6 +2037,10 @@
                     <div class="reading-profile-field full">
                         <label for="detail-reading-minutes">阅读投入（分钟）</label>
                         <input id="detail-reading-minutes" class="reading-profile-control" type="number" min="0" max="100000" step="10" inputmode="numeric" onchange="updateCurrentBookCosmosProfile()">
+                    </div>
+                    <div class="reading-profile-field full">
+                        <label for="detail-finished-at">阅读完成日期</label>
+                        <input id="detail-finished-at" class="reading-profile-control" type="date" onchange="updateCurrentBookCosmosProfile()">
                     </div>
                 </div>
             </div>
@@ -2131,13 +2161,65 @@ const SUPABASE_URL =
 const SUPABASE_ANON_KEY =
 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind5eWNhdWFrcGhmc3ZraXlwbGxoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3MjE2MzMsImV4cCI6MjA5NzI5NzYzM30.-7WsBsPmI3uS25LtcZtIB2NUqq8olnw273ljGqNN64o';
 
-const supabaseClient =
-window.supabase.createClient(
-    SUPABASE_URL,
-    SUPABASE_ANON_KEY
+let supabaseClient = null;
+let supabaseClientSource = null;
+const SUPABASE_OFFICIAL_SDK_WAIT_MS = 3000;
+const supabaseClientWaitStartedAt = Date.now();
+
+async function initializeSupabaseClient({ allowFallback = false } = {}) {
+    if (supabaseClient) return;
+    if (window.supabase) {
+        supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        supabaseClientSource = 'official';
+    } else if (allowFallback && window.createReadingCosmosSupabaseFallback) {
+        supabaseClient = window.createReadingCosmosSupabaseFallback(SUPABASE_URL, SUPABASE_ANON_KEY);
+        supabaseClientSource = 'fallback';
+    } else {
+        return;
+    }
+    if (document.readyState === 'loading') return;
+    const user = await getCurrentSupabaseUser();
+    if (user) await activateAuthenticatedShelf(user);
+    else if (!booksData.length) showGuestShelf();
+}
+
+async function getCurrentSupabaseUser() {
+    if (!supabaseClient) return null;
+    try {
+        const { data: { user } } = await supabaseClient.auth.getUser();
+        return user || null;
+    } catch (error) {
+        console.warn('Supabase 暂时无法连接，已保留访客书架。');
+        return null;
+    }
+}
+
+window.initializeSupabaseClient = initializeSupabaseClient;
+initializeSupabaseClient();
+window.setTimeout(
+    () => initializeSupabaseClient({ allowFallback: true }),
+    SUPABASE_OFFICIAL_SDK_WAIT_MS
 );
 
-console.log('Supabase Client Ready');
+function waitForSupabaseClient(timeoutMs = 12000) {
+    if (supabaseClient) return Promise.resolve(true);
+    const startedAt = Date.now();
+    return new Promise(resolve => {
+        const timer = window.setInterval(() => {
+            if (!supabaseClient) {
+                const allowFallback =
+                    Date.now() - supabaseClientWaitStartedAt >= SUPABASE_OFFICIAL_SDK_WAIT_MS;
+                initializeSupabaseClient({ allowFallback });
+            }
+            if (supabaseClient || Date.now() - startedAt >= timeoutMs) {
+                window.clearInterval(timer);
+                resolve(Boolean(supabaseClient));
+            }
+        }, 150);
+    });
+}
+
+console.log('Supabase client initialization scheduled');
 
 // =============================
 // 注册
@@ -2188,6 +2270,17 @@ async function showLogin() {
 
 async function submitAuthForm(event) {
     event.preventDefault();
+    if (!supabaseClient) {
+        const pendingButton = document.getElementById('auth-submit-btn');
+        pendingButton.disabled = true;
+        setAuthStatus('正在连接登录服务…');
+        const clientReady = await waitForSupabaseClient();
+        pendingButton.disabled = false;
+        if (!clientReady) {
+            setAuthStatus('登录服务连接超时，请检查网络后重试。', true);
+            return;
+        }
+    }
     const email = document.getElementById('auth-email').value.trim();
     const password = document.getElementById('auth-password').value;
     const button = document.getElementById('auth-submit-btn');
@@ -2458,6 +2551,7 @@ function serializeBookForBackup(book) {
         category: String(book.category || '未分类'),
         rating: Number(book.rating || 0),
         addedAt: new Date(Number(book.timestamp || Date.now())).toISOString(),
+        finishedAt: normalizeFinishedAt(book.finishedAt),
         coverUrl: getSafeBookCoverUrl(book.coverUrl) || (book.coverUrl === ARTWORK_COVER_SENTINEL ? ARTWORK_COVER_SENTINEL : ''),
         noteMethod: normalizeNoteMethod(book.noteMethod, book.category),
         notesRevision: Number(book.notesRevision || 0),
@@ -3089,6 +3183,9 @@ async function syncBooksToSupabase() {
                 normalizeBookImportance(book.importance),
             reading_minutes:
                 normalizeReadingMinutes(book.readingMinutes),
+            ...(booksFinishedAtSupported ? {
+                finished_at: normalizeFinishedAt(book.finishedAt) || null
+            } : {}),
 
             updated_at:
                 new Date().toISOString()
@@ -3155,6 +3252,10 @@ async function loadBooksFromSupabase(user = currentUser) {
         return false;
     }
 
+    booksFinishedAtSupported = data.length
+        ? Object.prototype.hasOwnProperty.call(data[0], 'finished_at')
+        : !(await supabaseClient.from('books').select('finished_at').limit(1)).error;
+
     booksData = data.map(book => ({
 
         cloudId:
@@ -3211,6 +3312,9 @@ async function loadBooksFromSupabase(user = currentUser) {
         readingMinutes:
             normalizeReadingMinutes(book.reading_minutes),
 
+        finishedAt:
+            normalizeFinishedAt(book.finished_at),
+
         aiData:
             sanitizeBookAIData(book.ai_data)
 
@@ -3240,6 +3344,7 @@ async function loadBookRelationships(user = currentUser) {
         bookRelationships = [];
         return false;
     }
+
     const localIdByCloudId = new Map(booksData.map(book => [book.cloudId, book.id]));
     bookRelationships = (data || []).map(item => ({
         id: item.id,
@@ -3256,6 +3361,8 @@ async function loadBookRelationships(user = currentUser) {
 // =============================
 
 (async () => {
+
+    if (!supabaseClient) return;
 
     const {
         data,
@@ -3299,6 +3406,7 @@ async function loadBookRelationships(user = currentUser) {
 
         let booksData = [];
         let bookRelationships = [];
+        let booksFinishedAtSupported = false;
         let currentUser = null;
         let currentView = 'shelf';
         let activeBookId = null;
@@ -3371,6 +3479,26 @@ async function loadBookRelationships(user = currentUser) {
         function normalizeReadingMinutes(value) {
             const minutes = Number.parseInt(value, 10);
             return Number.isFinite(minutes) ? Math.min(100000, Math.max(0, minutes)) : 0;
+        }
+
+        function normalizeFinishedAt(value) {
+            const text = String(value || '').trim();
+            const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+            if (!match) return '';
+            const year = Number(match[1]);
+            const month = Number(match[2]);
+            const day = Number(match[3]);
+            const date = new Date(Date.UTC(year, month - 1, day));
+            return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+                ? text
+                : '';
+        }
+
+        function getLocalDateInputValue(date = new Date()) {
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
         }
 
         function applyNoteMethodUI(book) {
@@ -3518,7 +3646,8 @@ async function loadBookRelationships(user = currentUser) {
         let cosmosState = {
             scale: 1.0, offsetX: 0, offsetY: 0, isDragging: false, startX: 0, startY: 0,
             planets: [], galaxies: [], hoveredPlanetIndex: null, focusedPlanetId: null,
-            animationFrameId: null, time: 0, isImmersive: false, viewBeforeImmersive: null
+            animationFrameId: null, time: 0, isImmersive: false, viewBeforeImmersive: null,
+            searchToolsVisible: false, bridgesVisible: false
         };
 
         const CATEGORY_MAP = {
@@ -3560,9 +3689,7 @@ function getCategoryStyle(cat) {
     'DOMContentLoaded',
     async () => {
 
-        const {
-            data: { user }
-        } = await supabaseClient.auth.getUser();
+        const user = await getCurrentSupabaseUser();
 
         currentUser = user || null;
 
@@ -3756,7 +3883,7 @@ function getCategoryStyle(cat) {
         function createBookCover(book) {
             const fallback = createProceduralCover(book.title, book.author, book.category);
             const coverUrl = getSafeBookCoverUrl(book.coverUrl);
-            if (!coverUrl) return fallback;
+            if (!coverUrl || isLowResolutionGoogleBooksCover(coverUrl)) return fallback;
             return `${fallback}<img class="book-cover-image" src="${escapeHTML(coverUrl)}" alt="${escapeHTML(book.title || '书籍')}封面" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">`;
         }
 
@@ -3769,6 +3896,7 @@ function getCategoryStyle(cat) {
         }
 
         const attemptedBookCovers = new Set();
+        const lowResolutionCoverCandidates = new Map();
         let shelfSearchQuery = '';
 
         function normalizeShelfSearchText(value) {
@@ -3823,12 +3951,37 @@ function getCategoryStyle(cat) {
             }
 
             const coverUrl = getSafeBookCoverUrl(data?.cover?.url);
-            if (!coverUrl) {
-                showAIStatus('未找到可信的书籍封面，已保留当前艺术封面', 'warning', 5000);
+            if (coverUrl && data?.cover?.requiresConfirmation && data?.cover?.quality === 'low') {
+                lowResolutionCoverCandidates.set(book.id, {
+                    url: coverUrl,
+                    width: Number(data.cover.width || 0),
+                    height: Number(data.cover.height || 0),
+                    source: String(data.cover.source || '')
+                });
+                book.coverMatchFailure = '仅找到清晰度较低的候选封面';
+                if (activeBookId === book.id) renderLowResolutionCoverCandidate(book.id);
+                showAIStatus('仅找到低清封面，可预览后决定是否使用', 'warning', 5000);
+                return false;
+            }
+            if (!coverUrl || isLowResolutionGoogleBooksCover(coverUrl)) {
+                const reasonMessages = {
+                    no_match: '未检索到与书名和作者匹配的封面',
+                    source_http: '封面来源暂时无法访问',
+                    fetch_exception: '封面来源连接失败',
+                    content_type: '候选封面格式不受支持',
+                    file_size: '候选封面文件异常',
+                    dimensions_unreadable: '无法确认候选封面的清晰度',
+                    dimensions_too_small: '候选封面清晰度不足',
+                    storage_upload: '封面暂时无法保存到云端'
+                };
+                book.coverMatchFailure = reasonMessages[data?.cover?.reason] || '未找到可信的书籍封面';
+                showAIStatus(`${book.coverMatchFailure}，已保留当前艺术封面`, 'warning', 5000);
                 return false;
             }
 
             book.coverUrl = coverUrl;
+            lowResolutionCoverCandidates.delete(book.id);
+            delete book.coverMatchFailure;
             try {
                 localStorage.setItem(
                     `reading_cosmos_data_store:${currentUser.id}`,
@@ -3850,6 +4003,52 @@ function getCategoryStyle(cat) {
             if (!status) return;
             status.textContent = message || '';
             status.style.color = isError ? '#b91c1c' : '#64748b';
+        }
+
+        function renderLowResolutionCoverCandidate(bookId = activeBookId) {
+            const preview = document.getElementById('cover-candidate-preview');
+            if (!preview) return;
+            const candidate = lowResolutionCoverCandidates.get(bookId);
+            if (!candidate) {
+                preview.classList.remove('visible');
+                preview.innerHTML = '';
+                return;
+            }
+            preview.innerHTML = `
+                <img src="${escapeHTML(candidate.url)}" alt="低清候选封面预览">
+                <div class="cover-candidate-copy">
+                    <strong>仅找到低清封面（${candidate.width} × ${candidate.height}）</strong>
+                    <span>可能在书架中显得模糊，请确认后使用。</span>
+                    <div class="cover-candidate-actions">
+                        <button class="cover-edit-btn primary" type="button" onclick="acceptLowResolutionCover()">仍然使用</button>
+                        <button class="cover-edit-btn" type="button" onclick="dismissLowResolutionCover()">保留艺术封面</button>
+                    </div>
+                </div>`;
+            preview.classList.add('visible');
+        }
+
+        async function acceptLowResolutionCover() {
+            if (!requireAuthenticatedUser() || !activeBookId) return;
+            const book = booksData.find(item => item.id === activeBookId);
+            const candidate = lowResolutionCoverCandidates.get(activeBookId);
+            if (!book || !candidate) return;
+            book.coverUrl = candidate.url;
+            delete book.coverMatchFailure;
+            lowResolutionCoverCandidates.delete(book.id);
+            attemptedBookCovers.add(book.id);
+            await saveToLocalStorage();
+            document.getElementById('detail-cover-url-input').value = candidate.url;
+            document.getElementById('detail-cover-slot').innerHTML = createBookCover(book);
+            renderLowResolutionCoverCandidate(book.id);
+            renderShelfView();
+            setCoverEditStatus('已按你的选择使用低清封面并同步。');
+        }
+
+        function dismissLowResolutionCover() {
+            if (!activeBookId) return;
+            lowResolutionCoverCandidates.delete(activeBookId);
+            renderLowResolutionCoverCandidate(activeBookId);
+            setCoverEditStatus('已保留艺术封面。');
         }
 
         function verifyRemoteImage(url) {
@@ -3899,6 +4098,7 @@ function getCategoryStyle(cat) {
             const book = booksData.find(item => item.id === activeBookId);
             if (!book) return;
             book.coverUrl = ARTWORK_COVER_SENTINEL;
+            lowResolutionCoverCandidates.delete(book.id);
             attemptedBookCovers.add(book.id);
             await saveToLocalStorage();
             document.getElementById('detail-cover-url-input').value = '';
@@ -3911,15 +4111,30 @@ function getCategoryStyle(cat) {
             if (!requireAuthenticatedUser() || !activeBookId) return;
             const book = booksData.find(item => item.id === activeBookId);
             if (!book) return;
-            book.coverUrl = '';
-            attemptedBookCovers.delete(book.id);
-            setCoverEditStatus('正在重新匹配可信封面…');
-            await saveToLocalStorage();
-            const matched = await hydrateBookCover(book);
-            document.getElementById('detail-cover-url-input').value = getSafeBookCoverUrl(book.coverUrl);
-            document.getElementById('detail-cover-slot').innerHTML = createBookCover(book);
-            renderShelfView();
-            setCoverEditStatus(matched ? '已匹配并同步封面。' : '未找到可信封面，已保留艺术封面。', !matched);
+            try {
+                book.coverUrl = '';
+                lowResolutionCoverCandidates.delete(book.id);
+                attemptedBookCovers.delete(book.id);
+                setCoverEditStatus('正在重新匹配可信封面…');
+                await saveToLocalStorage();
+                const matched = await hydrateBookCover(book);
+                document.getElementById('detail-cover-url-input').value = getSafeBookCoverUrl(book.coverUrl);
+                document.getElementById('detail-cover-slot').innerHTML = createBookCover(book);
+                renderLowResolutionCoverCandidate(book.id);
+                renderShelfView();
+                const hasLowResolutionCandidate = lowResolutionCoverCandidates.has(book.id);
+                setCoverEditStatus(
+                    matched
+                        ? '已匹配并同步封面。'
+                        : hasLowResolutionCandidate
+                            ? '仅找到低清封面，请预览后选择。'
+                            : `${book.coverMatchFailure || '未找到可信封面'}，已保留艺术封面。`,
+                    !matched && !hasLowResolutionCandidate
+                );
+            } catch (error) {
+                console.error('自动匹配封面失败', error);
+                setCoverEditStatus('封面匹配未完成，请稍后重试。', true);
+            }
         }
 
         // 书架渲染（包含悬浮编辑与删除按钮）
@@ -4003,6 +4218,7 @@ function getCategoryStyle(cat) {
             document.getElementById('input-book-category').value = '';
             document.getElementById('input-note-method').value =
                 'first_principles';
+            document.getElementById('input-finished-at').value = getLocalDateInputValue();
             document.getElementById('add-book-modal').classList.add('active');
         }
         function closeAddBookModal() {
@@ -4016,6 +4232,9 @@ function getCategoryStyle(cat) {
             let category = document.getElementById('input-book-category').value.trim();
             const noteMethod =
                 document.getElementById('input-note-method').value;
+            const finishedAt = normalizeFinishedAt(
+                document.getElementById('input-finished-at').value
+            );
             if(!title || !author) { alert('请完整填写书名和作者'); return; }
             if(!category) category = '未分类';
 
@@ -4026,6 +4245,7 @@ function getCategoryStyle(cat) {
                 readingDepth: 'standard',
                 importance: 1,
                 readingMinutes: 0,
+                finishedAt,
                 aiData: {},
                 coverUrl: '',
                 summary: '',
@@ -4186,6 +4406,7 @@ function getCategoryStyle(cat) {
             book.readingDepth = normalizeReadingDepth(book.readingDepth);
             book.importance = normalizeBookImportance(book.importance);
             book.readingMinutes = normalizeReadingMinutes(book.readingMinutes);
+            book.finishedAt = normalizeFinishedAt(book.finishedAt);
 
             applyNoteMethodUI(book);
 
@@ -4206,10 +4427,12 @@ function getCategoryStyle(cat) {
             document.getElementById('detail-reading-depth').value = book.readingDepth;
             document.getElementById('detail-book-importance').value = String(book.importance);
             document.getElementById('detail-reading-minutes').value = String(book.readingMinutes);
+            document.getElementById('detail-finished-at').value = book.finishedAt;
             renderBookRelationships(book);
 
             document.getElementById('detail-cover-slot').innerHTML = createBookCover(book);
             document.getElementById('detail-cover-url-input').value = getSafeBookCoverUrl(book.coverUrl);
+            renderLowResolutionCoverCandidate(book.id);
             setCoverEditStatus('');
             if (!book.isDemo && (!book.coverUrl || isLowResolutionGoogleBooksCover(book.coverUrl))) {
                 void hydrateBookCover(book);
@@ -4413,8 +4636,12 @@ function getCategoryStyle(cat) {
             book.readingMinutes = normalizeReadingMinutes(
                 document.getElementById('detail-reading-minutes').value
             );
+            book.finishedAt = normalizeFinishedAt(
+                document.getElementById('detail-finished-at').value
+            );
             document.getElementById('detail-book-importance').value = String(book.importance);
             document.getElementById('detail-reading-minutes').value = String(book.readingMinutes);
+            document.getElementById('detail-finished-at').value = book.finishedAt;
             await saveToLocalStorage();
             rebuildUniversePlanets();
         }
@@ -4979,6 +5206,33 @@ async function ensureReadingInsightConsent() {
 
         function handleCosmosSearchKey(event) {
             if (event.key === 'Enter') locateCosmosPlanet();
+            if (event.key === 'Escape') toggleCosmosSearchTools(false);
+        }
+
+        function toggleCosmosSearchTools(forceVisible) {
+            const shell = document.querySelector('.cosmos-search-shell');
+            const button = document.getElementById('cosmos-search-toggle');
+            cosmosState.searchToolsVisible = typeof forceVisible === 'boolean'
+                ? forceVisible
+                : !cosmosState.searchToolsVisible;
+            shell?.classList.toggle('active', cosmosState.searchToolsVisible);
+            button?.classList.toggle('active', cosmosState.searchToolsVisible);
+            button?.setAttribute('aria-label', cosmosState.searchToolsVisible ? '关闭搜索工具' : '打开搜索工具');
+            if (cosmosState.searchToolsVisible) {
+                requestAnimationFrame(() => document.getElementById('cosmos-search-input')?.focus());
+            }
+        }
+
+        function toggleCosmosBridges(forceVisible) {
+            const button = document.getElementById('cosmos-bridge-toggle');
+            cosmosState.bridgesVisible = typeof forceVisible === 'boolean'
+                ? forceVisible
+                : !cosmosState.bridgesVisible;
+            button?.classList.toggle('active', cosmosState.bridgesVisible);
+            button?.setAttribute('aria-pressed', String(cosmosState.bridgesVisible));
+            button?.setAttribute('aria-label', cosmosState.bridgesVisible ? '隐藏知识桥梁' : '显示知识桥梁');
+            button?.setAttribute('title', cosmosState.bridgesVisible ? '隐藏知识桥梁' : '显示知识桥梁');
+            updateCosmosOverviewStatus();
         }
 
         function locateCosmosPlanet() {
@@ -5041,7 +5295,7 @@ async function ensureReadingInsightConsent() {
             });
 
             const planetById = new Map(cosmosState.planets.map(planet => [planet.id, planet]));
-            bookRelationships.forEach(relationship => {
+            if (cosmosState.bridgesVisible) bookRelationships.forEach(relationship => {
                 const source = planetById.get(relationship.sourceBookId);
                 const target = planetById.get(relationship.targetBookId);
                 if (!source || !target) return;

@@ -9,6 +9,16 @@ function isGoogleBooksHost(hostname: string): boolean {
     /^books\.google\.(?:[a-z]{2,3}|co\.[a-z]{2}|com\.[a-z]{2})$/i.test(hostname);
 }
 
+function isSupabaseBookCoverUrl(url: URL): boolean {
+  return url.hostname.endsWith(".supabase.co") &&
+    url.pathname.includes("/storage/v1/object/public/book-covers/");
+}
+
+export function isManagedBookCoverUrl(value: unknown): boolean {
+  try { return isSupabaseBookCoverUrl(new URL(String(value ?? ""))); }
+  catch { return false; }
+}
+
 export function normalizeBookMetadata(value: unknown): string {
   return String(value ?? "")
     .normalize("NFKC")
@@ -34,7 +44,7 @@ export function buildGoogleBooksSearchParams(
     q,
     maxResults: "10",
     printType: "books",
-    projection: "lite",
+    projection: "full",
   });
   const normalizedApiKey = String(apiKey ?? "").trim();
   if (normalizedApiKey) params.set("key", normalizedApiKey);
@@ -45,7 +55,7 @@ export function safeBookCoverUrl(value: unknown): string {
   try {
     const url = new URL(String(value ?? "").replace(/^http:/i, "https:"));
     return url.protocol === "https:" &&
-        (COVER_HOSTS.has(url.hostname) || isGoogleBooksHost(url.hostname))
+        (COVER_HOSTS.has(url.hostname) || isGoogleBooksHost(url.hostname) || isSupabaseBookCoverUrl(url))
       ? url.toString()
       : "";
   } catch {
@@ -65,7 +75,7 @@ export function selectGoogleBooksCover(imageLinks: unknown): string {
   const links = imageLinks as Record<string, unknown>;
   for (const size of ["extraLarge", "large", "medium", "small", "thumbnail", "smallThumbnail"]) {
     const coverUrl = safeBookCoverUrl(links[size]);
-    if (!coverUrl) continue;
+    if (!coverUrl || isLowResolutionGoogleBooksCover(coverUrl)) continue;
     return coverUrl;
   }
   return "";
