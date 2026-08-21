@@ -305,7 +305,12 @@ async function storeVerifiedBookCover(
   userId: string,
   bookId: string,
   sourceUrl: string,
+  sourceName: string,
+  requestId: string,
 ): Promise<string> {
+  const logRejection = (reason: string, details: Record<string, unknown> = {}) => {
+    console.warn("book cover rejected", { requestId, bookId, source: sourceName, reason, ...details });
+  };
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
   try {
@@ -313,13 +318,29 @@ async function storeVerifiedBookCover(
       headers: { "User-Agent": "ReadingCosmos/1.0 (https://github.com/cosmovia/reading-cosmos)" },
       signal: controller.signal,
     });
-    if (!response.ok) return "";
+    if (!response.ok) {
+      logRejection("source_http", { status: response.status });
+      return "";
+    }
     const contentType = String(response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
-    if (!new Set(["image/jpeg", "image/png"]).has(contentType)) return "";
+    if (!new Set(["image/jpeg", "image/png"]).has(contentType)) {
+      logRejection("content_type", { contentType });
+      return "";
+    }
     const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.length < 4096 || bytes.length > 5 * 1024 * 1024) return "";
+    if (bytes.length < 4096 || bytes.length > 5 * 1024 * 1024) {
+      logRejection("file_size", { bytes: bytes.length });
+      return "";
+    }
     const dimensions = readRasterDimensions(bytes, contentType);
-    if (!dimensions || dimensions.width < 240 || dimensions.height < 300) return "";
+    if (!dimensions) {
+      logRejection("dimensions_unreadable", { contentType, bytes: bytes.length });
+      return "";
+    }
+    if (dimensions.width < 240 || dimensions.height < 300) {
+      logRejection("dimensions_too_small", dimensions);
+      return "";
+    }
     const extension = contentType === "image/png" ? "png" : "jpg";
     const objectPath = `${userId}/${bookId}.${extension}`;
     const { error } = await adminClient.storage.from("book-covers").upload(objectPath, bytes, {
@@ -327,9 +348,13 @@ async function storeVerifiedBookCover(
       cacheControl: "31536000",
       upsert: true,
     });
-    if (error) return "";
+    if (error) {
+      logRejection("storage_upload", { message: error.message });
+      return "";
+    }
     return adminClient.storage.from("book-covers").getPublicUrl(objectPath).data.publicUrl;
-  } catch {
+  } catch (error) {
+    logRejection("fetch_exception", { message: error instanceof Error ? error.message : String(error) });
     return "";
   } finally {
     clearTimeout(timeout);
@@ -843,6 +868,8 @@ Deno.serve(async (req: Request) => {
       userData.user.id,
       String(book.id),
       cover.url,
+      cover.source,
+      requestId,
     );
     if (!storedCoverUrl) {
       return jsonResponse({ requestId, cover: { url: null, source: cover.source, cacheHit: false } });
