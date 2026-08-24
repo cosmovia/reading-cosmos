@@ -3,6 +3,7 @@
 
     function createClient(baseUrl, anonKey) {
         let session = readSession();
+        const authListeners = new Set();
 
         function readSession() {
             try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null'); }
@@ -13,6 +14,10 @@
             session = nextSession || null;
             if (session) localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
             else localStorage.removeItem(STORAGE_KEY);
+        }
+
+        function notifyAuthListeners(event) {
+            authListeners.forEach(listener => listener(event, session));
         }
 
         function authHeaders(useSession = true) {
@@ -58,6 +63,19 @@
                 expires_at: payload.expires_at || Math.floor(Date.now() / 1000) + Number(payload.expires_in || 3600),
                 user: payload.user || session?.user || null
             };
+        }
+
+
+        function recoverSessionFromUrl() {
+            const params = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+            if (params.get('type') !== 'recovery' || !params.get('access_token')) return;
+            saveSession(normalizeSession({
+                access_token: params.get('access_token'),
+                refresh_token: params.get('refresh_token'),
+                expires_in: params.get('expires_in')
+            }));
+            window.history.replaceState({}, document.title, `${window.location.pathname}${window.location.search}`);
+            window.setTimeout(() => notifyAuthListeners('PASSWORD_RECOVERY'), 0);
         }
 
         async function authRequest(path, body) {
@@ -121,6 +139,8 @@
             }
         }
 
+        recoverSessionFromUrl();
+
         return {
             auth: {
                 async signInWithPassword(credentials) {
@@ -154,6 +174,39 @@
                 async getSession() {
                     await refreshSessionIfNeeded();
                     return { data: { session }, error: null };
+                },
+                async resetPasswordForEmail(email, options = {}) {
+                    const query = options.redirectTo
+                        ? `?redirect_to=${encodeURIComponent(options.redirectTo)}`
+                        : '';
+                    return authRequest(`/auth/v1/recover${query}`, { email });
+                },
+                async updateUser(attributes) {
+                    await refreshSessionIfNeeded();
+                    if (!session?.access_token) {
+                        return { data: null, error: { message: '恢复链接已失效，请重新申请。' } };
+                    }
+                    try {
+                        const response = await fetch(`${baseUrl}/auth/v1/user`, {
+                            method: 'PUT', headers: authHeaders(), body: JSON.stringify(attributes)
+                        });
+                        const result = await readResponse(response);
+                        if (result.error) return result;
+                        session.user = result.data;
+                        saveSession(session);
+                        notifyAuthListeners('USER_UPDATED');
+                        return { data: { user: result.data }, error: null };
+                    } catch (error) {
+                        return { data: null, error: { message: error.message || '网络连接失败' } };
+                    }
+                },
+                onAuthStateChange(callback) {
+                    authListeners.add(callback);
+                    return {
+                        data: {
+                            subscription: { unsubscribe: () => authListeners.delete(callback) }
+                        }
+                    };
                 },
                 async signOut() {
                     try {
