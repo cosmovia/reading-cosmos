@@ -2191,8 +2191,11 @@ async function initializeSupabaseClient({ allowFallback = false } = {}) {
 async function getCurrentSupabaseUser() {
     if (!supabaseClient) return null;
     try {
-        const { data: { user } } = await supabaseClient.auth.getUser();
-        return user || null;
+        const { data: userData, error } = await supabaseClient.auth.getUser();
+        if (userData?.user) return userData.user;
+        if (error) console.warn('云端会话验证暂不可用，尝试使用本机已有会话。');
+        const { data: sessionData } = await supabaseClient.auth.getSession();
+        return sessionData?.session?.user || null;
     } catch (error) {
         console.warn('Supabase 暂时无法连接，已保留访客书架。');
         return null;
@@ -2339,7 +2342,7 @@ async function logoutUser() {
 // =============================
 
 async function showSettings() {
-    const { data: { user } } = await supabaseClient.auth.getUser();
+    const user = await getCurrentSupabaseUser();
     if (!user) {
         alert('请先登录');
         return;
@@ -3233,10 +3236,7 @@ function updateReaderTitleDisplay() {
 }
 
 async function checkLoginStatus() {
-
-    const {
-        data: { user }
-    } = await supabaseClient.auth.getUser();
+    const user = await getCurrentSupabaseUser();
 
     const authArea =
         document.getElementById("auth-area");
@@ -3350,7 +3350,64 @@ function updateCloudSyncStatusDisplay(message = '', isError = false) {
 function markCloudSyncSuccess() {
     const syncedAt = new Date().toISOString();
     if (getCloudSyncStorageKey()) localStorage.setItem(getCloudSyncStorageKey(), syncedAt);
+    persistCurrentShelfCache();
     updateCloudSyncStatusDisplay(`同步完成：${new Date(syncedAt).toLocaleString()}`);
+}
+
+function getShelfStorageKey(user = currentUser) {
+    return user?.id ? `reading_cosmos_data_store:${user.id}` : '';
+}
+
+function persistCurrentShelfCache() {
+    const key = getShelfStorageKey();
+    if (!key) return false;
+    try {
+        localStorage.setItem(key, JSON.stringify(booksData.filter(book => !book.isDemo)));
+        return true;
+    } catch (error) {
+        console.error('本机书架缓存保存失败', error);
+        return false;
+    }
+}
+
+function loadCachedShelf(user = currentUser) {
+    const key = getShelfStorageKey(user);
+    if (!key) return [];
+    try {
+        const parsed = JSON.parse(localStorage.getItem(key) || '[]');
+        if (!Array.isArray(parsed)) return [];
+        return parsed.slice(0, 500).map(value => {
+            if (!value || typeof value !== 'object') return null;
+            const id = String(value.id || '').trim();
+            const title = String(value.title || '').trim();
+            if (!id || !title) return null;
+            const book = {
+                ...value,
+                id,
+                title,
+                author: String(value.author || ''),
+                category: String(value.category || '未分类') || '未分类',
+                rating: Math.min(5, Math.max(0, Number(value.rating) || 0)),
+                timestamp: Number(value.timestamp || Date.now()),
+                noteMethod: normalizeNoteMethod(value.noteMethod, value.category),
+                notesRevision: Math.max(0, Number(value.notesRevision || 0)),
+                readingDepth: normalizeReadingDepth(value.readingDepth),
+                importance: normalizeBookImportance(value.importance),
+                readingMinutes: normalizeReadingMinutes(value.readingMinutes),
+                finishedAt: normalizeFinishedAt(value.finishedAt),
+                aiData: sanitizeBookAIData(value.aiData),
+                syncRevision: Math.max(0, Number(value.syncRevision || 0)),
+                isDemo: false
+            };
+            book.syncFingerprint = typeof value.syncFingerprint === 'string'
+                ? value.syncFingerprint
+                : getBookSyncFingerprint(book);
+            return book;
+        }).filter(Boolean);
+    } catch (error) {
+        console.error('本机书架缓存读取失败', error);
+        return [];
+    }
 }
 
 function savePendingSyncSnapshot(conflictTitles) {
@@ -3957,8 +4014,12 @@ async function loadBookRelationships(user = currentUser) {
             if (loaded) await loadBookRelationships(currentUser);
 
             if (!loaded) {
-                booksData = [];
-                alert('云端书架读取失败，请稍后重试');
+                booksData = loadCachedShelf(currentUser);
+                bookRelationships = [];
+                const cacheMessage = booksData.length
+                    ? `云端暂时无法连接，已显示本机缓存的 ${booksData.length} 本书。联网恢复前不会覆盖云端新版。`
+                    : '云端书架读取失败，当前设备也没有可用缓存，请稍后重试。';
+                showAIStatus(cacheMessage, booksData.length ? 'warning' : 'error', 8000);
             }
 
             await checkLoginStatus();
@@ -4066,12 +4127,7 @@ function getCategoryStyle(cat) {
     if (!currentUser) return false;
     managedReadingInsight = null;
 
-    localStorage.setItem(
-        `reading_cosmos_data_store:${currentUser.id}`,
-        JSON.stringify(
-            booksData.filter(book => !book.isDemo)
-        )
-    );
+    persistCurrentShelfCache();
 
     return await syncBooksToSupabase();
 }
