@@ -1950,13 +1950,15 @@
                 <div class="form-group form-group-full"><label for="settings-api-key">API Key</label><input type="password" id="settings-api-key" class="form-input" autocomplete="off" placeholder="仅保存在当前浏览器"></div>
                 <div class="settings-section-title" id="settings-sync-section">数据与同步</div>
                 <div class="sync-summary">
-                    书籍、评分、笔记与已缓存的阅读洞察会同步到当前账号。个人 API Key 只保存在本浏览器，不参与云同步。备份文件不会包含 API Key；恢复与账号数据删除将在后续数据资产批次提供。
+                    书籍、评分、笔记与已缓存的阅读洞察会同步到当前账号。个人 API Key 只保存在本浏览器，不参与云同步。备份文件不会包含 API Key；恢复采用安全合并，不会删除书架中已有的其他书籍。
                     <div class="data-export-actions">
                         <button type="button" class="data-export-btn" onclick="exportReadingCosmosBackup()">导出个人数据备份</button>
+                        <button type="button" class="data-export-btn" id="data-restore-btn" onclick="openReadingCosmosRestorePicker()">恢复数据备份</button>
+                        <input type="file" id="data-restore-input" accept="application/json,.json" hidden onchange="restoreReadingCosmosBackup(event)">
                     </div>
                 </div>
             </div>
-            <div class="settings-security-note">平台 Gateway 用于书籍概要、笔记思考建议和阅读洞察；笔记建议正文只在当前编辑会话显示，阅读洞察经单独确认后跨设备保存。个人 BYOK 目前仅用于可选的概要生成，API Key 只保存在当前浏览器，不上传 Supabase。当前平台只启用 GLM，尚未启用跨服务商自动切换。</div>
+            <div class="settings-security-note">平台 Gateway 用于书籍概要、笔记思考建议和阅读洞察；笔记建议正文只在当前编辑会话显示，阅读洞察经单独确认后跨设备保存。个人 BYOK 目前仅用于可选的概要生成，API Key 只保存在当前浏览器，不上传 Supabase。平台优先使用 GLM，并在服务繁忙或暂不可用时自动尝试 OpenRouter 免费备用路由。</div>
             <div class="settings-status" id="settings-status" role="status"></div>
             <div class="modal-buttons">
                 <button class="btn-secondary" onclick="closeSettings()" style="background:#f1f5f9; border:none; padding:10px 16px; border-radius:8px; cursor:pointer;">取消</button>
@@ -2568,18 +2570,29 @@ function serializeBookForBackup(book) {
     };
 }
 
+function serializeRelationshipForBackup(relationship) {
+    return {
+        sourceBookId: String(relationship.sourceBookId || ''),
+        targetBookId: String(relationship.targetBookId || ''),
+        type: String(relationship.type || 'resonates'),
+        strength: Number(relationship.strength || 1),
+        note: String(relationship.note || '')
+    };
+}
+
 function exportReadingCosmosBackup() {
     if (!requireAuthenticatedUser()) return;
     const realBooks = booksData.filter(book => !book.isDemo);
     const payload = {
         format: 'reading-cosmos-backup',
-        schemaVersion: 1,
+        schemaVersion: 2,
         exportedAt: new Date().toISOString(),
         reader: {
             displayName: String(currentUser?.user_metadata?.display_name || currentUser?.email?.split('@')[0] || ''),
             title: getReaderTitle(realBooks.length)
         },
         books: realBooks.map(serializeBookForBackup),
+        relationships: bookRelationships.map(serializeRelationshipForBackup),
         readingInsight: managedReadingInsight || null,
         privacy: {
             apiKeysIncluded: false,
@@ -2592,6 +2605,160 @@ function exportReadingCosmosBackup() {
         'application/json'
     );
     setSettingsStatus(`已导出 ${realBooks.length} 本书的数据备份，不包含 API Key。`);
+}
+
+function openReadingCosmosRestorePicker() {
+    if (!requireAuthenticatedUser()) return;
+    document.getElementById('data-restore-input')?.click();
+}
+
+function normalizeBackupBook(value, index) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error(`第 ${index + 1} 本书格式无效`);
+    }
+    const title = String(value.title || '').trim().slice(0, 300);
+    if (!title) throw new Error(`第 ${index + 1} 本书缺少书名`);
+    const sourceBookId = String(value.sourceBookId || '').trim().slice(0, 200) || crypto.randomUUID();
+    const addedAt = Date.parse(String(value.addedAt || ''));
+    const rating = Math.min(5, Math.max(0, Number(value.rating) || 0));
+    const notes = value.notes && typeof value.notes === 'object' ? value.notes : {};
+    return {
+        id: sourceBookId,
+        title,
+        author: String(value.author || '').trim().slice(0, 300),
+        category: String(value.category || '未分类').trim().slice(0, 80) || '未分类',
+        rating,
+        timestamp: Number.isFinite(addedAt) ? addedAt : Date.now(),
+        finishedAt: normalizeFinishedAt(value.finishedAt),
+        coverUrl: getSafeBookCoverUrl(value.coverUrl) || (value.coverUrl === ARTWORK_COVER_SENTINEL ? ARTWORK_COVER_SENTINEL : ''),
+        noteMethod: normalizeNoteMethod(value.noteMethod, value.category),
+        notesRevision: Math.max(0, Number.parseInt(value.notesRevision, 10) || 0),
+        readingDepth: normalizeReadingDepth(value.readingDepth),
+        importance: normalizeBookImportance(value.importance),
+        readingMinutes: normalizeReadingMinutes(value.readingMinutes),
+        summary: String(value.summary || '').slice(0, 100000),
+        concepts: String(notes.concepts || '').slice(0, 100000),
+        thoughts: String(notes.thoughts || '').slice(0, 100000),
+        actions: String(notes.actions || '').slice(0, 100000),
+        aiData: sanitizeBookAIData(value.aiData)
+    };
+}
+
+function normalizeBackupRelationships(values, validBookIds) {
+    if (!Array.isArray(values)) return [];
+    const allowedTypes = new Set(['resonates', 'extends', 'contrasts', 'supports']);
+    const unique = new Map();
+    values.forEach(value => {
+        if (!value || typeof value !== 'object') return;
+        const sourceBookId = String(value.sourceBookId || '').trim();
+        const targetBookId = String(value.targetBookId || '').trim();
+        if (!sourceBookId || !targetBookId || sourceBookId === targetBookId) return;
+        if (!validBookIds.has(sourceBookId) || !validBookIds.has(targetBookId)) return;
+        const type = allowedTypes.has(value.type) ? value.type : 'resonates';
+        unique.set(`${sourceBookId}\u0000${targetBookId}`, {
+            sourceBookId,
+            targetBookId,
+            type,
+            strength: Math.min(3, Math.max(1, Number.parseInt(value.strength, 10) || 1)),
+            note: String(value.note || '').slice(0, 2000)
+        });
+    });
+    return [...unique.values()];
+}
+
+function buildBookRestoreRow(book, userId) {
+    return {
+        source_book_id: book.id,
+        user_id: userId,
+        title: book.title,
+        author: book.author,
+        category: book.category,
+        rating: book.rating,
+        summary: book.summary,
+        concepts: book.concepts,
+        thoughts: book.thoughts,
+        actions: book.actions,
+        cover_url: book.coverUrl,
+        timestamp: book.timestamp,
+        note_method: book.noteMethod,
+        notes_revision: book.notesRevision,
+        ai_data: book.aiData,
+        reading_depth: book.readingDepth,
+        importance: book.importance,
+        reading_minutes: book.readingMinutes,
+        ...(booksFinishedAtSupported ? { finished_at: book.finishedAt || null } : {}),
+        updated_at: new Date().toISOString()
+    };
+}
+
+async function restoreReadingCosmosBackup(event) {
+    const input = event?.target;
+    const file = input?.files?.[0];
+    if (!file || !requireAuthenticatedUser()) return;
+    const button = document.getElementById('data-restore-btn');
+    try {
+        if (file.size > 10 * 1024 * 1024) throw new Error('备份文件不能超过 10 MB');
+        const payload = JSON.parse(await file.text());
+        if (payload?.format !== 'reading-cosmos-backup') throw new Error('这不是 Reading Cosmos 备份文件');
+        if (![1, 2].includes(Number(payload.schemaVersion))) throw new Error('备份版本暂不支持');
+        if (!Array.isArray(payload.books) || payload.books.length > 500) throw new Error('备份中的书籍数量或格式无效');
+
+        const restoredBooks = payload.books.map(normalizeBackupBook);
+        const restoredById = new Map(restoredBooks.map(book => [book.id, book]));
+        if (restoredById.size !== restoredBooks.length) throw new Error('备份中存在重复的书籍标识');
+        const existingBooks = booksData.filter(book => !book.isDemo);
+        const mergedById = new Map(existingBooks.map(book => [String(book.id), book]));
+        const replacedCount = restoredBooks.filter(book => mergedById.has(book.id)).length;
+        restoredBooks.forEach(book => mergedById.set(book.id, book));
+        const mergedBooks = [...mergedById.values()];
+        const relationships = normalizeBackupRelationships(payload.relationships, new Set(mergedById.keys()));
+        const bridgeText = relationships.length ? `，并恢复 ${relationships.length} 条知识桥梁` : '';
+        const confirmed = confirm(
+            `将从备份恢复 ${restoredBooks.length} 本书${bridgeText}。其中 ${replacedCount} 本同源书籍会更新，书架中的其他书籍不会删除。是否继续？`
+        );
+        if (!confirmed) return;
+
+        button.disabled = true;
+        setSettingsStatus('正在校验并同步备份…');
+        const { data: savedBooks, error: booksError } = await supabaseClient
+            .from('books')
+            .upsert(mergedBooks.map(book => buildBookRestoreRow(book, currentUser.id)), {
+                onConflict: 'user_id,source_book_id'
+            })
+            .select('id, source_book_id');
+        if (booksError) throw new Error(`书籍恢复失败：${booksError.message}`);
+
+        if (relationships.length) {
+            const cloudIdBySourceId = new Map((savedBooks || []).map(book => [String(book.source_book_id), book.id]));
+            const relationshipRows = relationships.map(item => ({
+                user_id: currentUser.id,
+                source_book_id: cloudIdBySourceId.get(item.sourceBookId),
+                target_book_id: cloudIdBySourceId.get(item.targetBookId),
+                relationship_type: item.type,
+                strength: item.strength,
+                note: item.note,
+                updated_at: new Date().toISOString()
+            })).filter(item => item.source_book_id && item.target_book_id);
+            if (relationshipRows.length) {
+                const { error: relationshipError } = await supabaseClient
+                    .from('book_relationships')
+                    .upsert(relationshipRows, { onConflict: 'user_id,source_book_id,target_book_id' });
+                if (relationshipError) throw new Error(`书籍已恢复，但知识桥梁恢复失败：${relationshipError.message}`);
+            }
+        }
+
+        await activateAuthenticatedShelf(currentUser);
+        localStorage.setItem(`reading_cosmos_data_store:${currentUser.id}`, JSON.stringify(booksData));
+        managedReadingInsight = null;
+        renderDataInsights();
+        setSettingsStatus(`恢复完成：新增 ${restoredBooks.length - replacedCount} 本，更新 ${replacedCount} 本。AI 阅读洞察可按当前书架重新分析。`);
+    } catch (error) {
+        console.error('恢复数据备份失败', error);
+        setSettingsStatus(error.message || '恢复失败，请检查备份文件后重试', true);
+    } finally {
+        if (button) button.disabled = false;
+        if (input) input.value = '';
+    }
 }
 
 function buildReadingReportText() {
