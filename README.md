@@ -29,6 +29,14 @@ Gateway 已具备多模型路由、限流重试与熔断结构。GLM 是主路�
 - `OPENROUTER_API_KEY`：可选的书籍概要免费备用路由 Key，禁止提交到 Git。
 - `OPENROUTER_MODEL`：可选，默认 `openrouter/free`；也可指定单个 OpenRouter 免费模型 ID。
 
+## 正式使用检查
+
+- Supabase Authentication 的 Site URL 使用正式地址 `https://cosmovia.github.io/reading-cosmos/`。
+- Authentication → URL Configuration → Redirect URLs 同时保留正式地址与本地测试地址 `http://127.0.0.1:8765/index.html`，用于注册验证和密码恢复。
+- 发布前分别验证：注册与登录、密码恢复、新增/编辑/删除书籍、刷新后的书架恢复、数据备份与恢复、AI 服务状态、内容概要以及知识桥梁。
+- 断网时书架优先显示当前账号的本机缓存；未同步修改保留在本机。网络恢复后应用会先安全同步本机修改，再读取云端书架；版本冲突不会静默覆盖云端数据。
+- Supabase 免费方案的认证邮件与项目可用性存在平台限额。个人低频使用阶段维持默认配置即可；准备公开推广前再配置自有 SMTP 并重新检查 Auth Rate Limits。
+
 迁移与部署顺序：先执行 `supabase/migrations`，再部署 `ai-gateway`，确认 Secret 后才发布前端。回滚时先恢复旧前端，再回滚 Gateway；`books.ai_data.overview` 兼容镜像保证已生成概要仍可显示。
 
 它诞生于一个非常简单的问题：

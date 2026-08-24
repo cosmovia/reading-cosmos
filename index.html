@@ -3480,6 +3480,40 @@ function markCloudSyncSuccess() {
     updateCloudSyncStatusDisplay(`同步完成：${new Date(syncedAt).toLocaleString()}`);
 }
 
+let cloudReconnectInProgress = false;
+
+async function recoverCloudConnection() {
+    if (!currentUser || cloudReconnectInProgress || !navigator.onLine) return;
+    cloudReconnectInProgress = true;
+    updateCloudSyncStatusDisplay('网络已恢复，正在核对云端书架…');
+    try {
+        if (hasPendingBookChanges()) {
+            const synced = await syncBooksToSupabase();
+            if (!synced) return;
+        }
+        const loaded = await loadBooksFromSupabase(currentUser);
+        if (!loaded) throw new Error('云端书架仍然无法连接');
+        await loadBookRelationships(currentUser);
+        markCloudSyncSuccess();
+        refreshApplicationData();
+        showAIStatus('网络已恢复，书架已与云端核对', 'success', 4500);
+    } catch (error) {
+        const message = error.message || '网络已恢复，但云端同步仍不可用，请稍后在设置中重试。';
+        updateCloudSyncStatusDisplay(message, true);
+        showAIStatus(message, 'warning', 6000);
+    } finally {
+        cloudReconnectInProgress = false;
+    }
+}
+
+window.addEventListener('offline', () => {
+    if (!currentUser) return;
+    updateCloudSyncStatusDisplay('当前处于离线状态；修改会保留在本机，联网后自动重试。', true);
+    showAIStatus('网络已断开，当前书架仍可浏览，修改会先保留在本机', 'warning', 5500);
+});
+
+window.addEventListener('online', recoverCloudConnection);
+
 function getShelfStorageKey(user = currentUser) {
     return user?.id ? `reading_cosmos_data_store:${user.id}` : '';
 }
@@ -4211,11 +4245,7 @@ function getCategoryStyle(cat) {
         currentUser = user || null;
 
         if (currentUser) {
-            const loaded =
-                await loadBooksFromSupabase(currentUser);
-
-            if (!loaded) booksData = [];
-            else await loadBookRelationships(currentUser);
+            await activateAuthenticatedShelf(currentUser);
         } else {
             booksData = createDemoBooks();
         }
