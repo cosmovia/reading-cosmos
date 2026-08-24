@@ -1954,6 +1954,7 @@
                     <div class="ai-service-meta" id="cloud-sync-status" aria-live="polite"></div>
                     <div class="data-export-actions">
                         <button type="button" class="data-export-btn" id="cloud-refresh-btn" onclick="reloadCloudShelf()">刷新云端书架</button>
+                        <button type="button" class="data-export-btn" id="sync-conflict-export-btn" onclick="exportPendingSyncBackup()" hidden>导出未同步修改</button>
                         <button type="button" class="data-export-btn" onclick="exportReadingCosmosBackup()">导出个人数据备份</button>
                         <button type="button" class="data-export-btn" id="data-restore-btn" onclick="openReadingCosmosRestorePicker()">恢复数据备份</button>
                         <input type="file" id="data-restore-input" accept="application/json,.json" hidden onchange="restoreReadingCosmosBackup(event)">
@@ -3332,18 +3333,75 @@ function getCloudSyncStorageKey() {
     return currentUser ? `reading_cosmos_last_sync:${currentUser.id}` : '';
 }
 
+function getPendingSyncStorageKey() {
+    return currentUser ? `reading_cosmos_pending_sync:${currentUser.id}` : '';
+}
+
 function updateCloudSyncStatusDisplay(message = '', isError = false) {
     const node = document.getElementById('cloud-sync-status');
     if (!node) return;
     const stored = getCloudSyncStorageKey() ? localStorage.getItem(getCloudSyncStorageKey()) : '';
     node.textContent = message || (stored ? `上次成功同步：${new Date(stored).toLocaleString()}` : '尚无同步记录');
     node.style.color = isError ? '#b91c1c' : '#64748b';
+    const conflictButton = document.getElementById('sync-conflict-export-btn');
+    if (conflictButton) conflictButton.hidden = !localStorage.getItem(getPendingSyncStorageKey());
 }
 
 function markCloudSyncSuccess() {
     const syncedAt = new Date().toISOString();
     if (getCloudSyncStorageKey()) localStorage.setItem(getCloudSyncStorageKey(), syncedAt);
     updateCloudSyncStatusDisplay(`同步完成：${new Date(syncedAt).toLocaleString()}`);
+}
+
+function savePendingSyncSnapshot(conflictTitles) {
+    if (!getPendingSyncStorageKey()) return false;
+    const realBooks = booksData.filter(book => !book.isDemo);
+    const payload = {
+        format: 'reading-cosmos-backup',
+        schemaVersion: 2,
+        exportedAt: new Date().toISOString(),
+        backupReason: 'sync-conflict',
+        conflictTitles: conflictTitles.map(title => String(title || '')).filter(Boolean),
+        reader: {
+            displayName: String(currentUser?.user_metadata?.display_name || currentUser?.email?.split('@')[0] || ''),
+            title: getReaderTitle(realBooks.length)
+        },
+        books: realBooks.map(serializeBookForBackup),
+        relationships: bookRelationships.map(serializeRelationshipForBackup),
+        readingInsight: null,
+        privacy: {
+            apiKeysIncluded: false,
+            transientAISuggestionsIncluded: false
+        }
+    };
+    try {
+        localStorage.setItem(getPendingSyncStorageKey(), JSON.stringify(payload));
+        return true;
+    } catch (error) {
+        console.error('保存未同步修改失败', error);
+        return false;
+    }
+}
+
+function exportPendingSyncBackup() {
+    if (!requireAuthenticatedUser()) return;
+    const raw = localStorage.getItem(getPendingSyncStorageKey());
+    if (!raw) {
+        setSettingsStatus('当前没有待导出的未同步修改。');
+        updateCloudSyncStatusDisplay();
+        return;
+    }
+    try {
+        const payload = JSON.parse(raw);
+        downloadTextFile(
+            `reading-cosmos-unsynced-${getExportDateStamp()}.json`,
+            JSON.stringify(payload, null, 2),
+            'application/json'
+        );
+        setSettingsStatus('未同步修改已导出。确认文件保存后，可刷新云端书架。');
+    } catch (error) {
+        setSettingsStatus('未同步修改读取失败，请先导出完整个人数据备份。', true);
+    }
 }
 
 function hasPendingBookChanges() {
@@ -3354,6 +3412,9 @@ function hasPendingBookChanges() {
 
 async function reloadCloudShelf() {
     if (!requireAuthenticatedUser()) return;
+    if (localStorage.getItem(getPendingSyncStorageKey()) && !confirm('仍有一份未同步修改保存在当前浏览器。建议先点击“导出未同步修改”；继续刷新只会替换当前页面，不会删除这份本地副本。是否继续？')) {
+        return;
+    }
     if (hasPendingBookChanges() && !confirm('当前设备存在尚未同步的修改。刷新云端书架不会覆盖云端，但会替换当前页面内容；建议先导出备份。是否继续？')) {
         return;
     }
@@ -3467,7 +3528,8 @@ async function syncBooksToSupabase() {
     }
 
     if (conflicts.length) {
-        const message = `检测到其他设备已更新：${conflicts.slice(0, 3).join('、')}。当前修改已保留在本机，未覆盖云端；请刷新云端书架后再编辑。`;
+        const snapshotSaved = savePendingSyncSnapshot(conflicts);
+        const message = `检测到其他设备已更新：${conflicts.slice(0, 3).join('、')}。当前修改未覆盖云端${snapshotSaved ? '，并已保存为可导出的本地副本' : ''}；请在设置中处理后再刷新。`;
         updateCloudSyncStatusDisplay(message, true);
         showAIStatus(message, 'warning', 8000);
     }
