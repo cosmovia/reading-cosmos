@@ -93,6 +93,11 @@
                 if (options.onConflict) this.params.set('on_conflict', options.onConflict);
                 return this;
             }
+            update(value) {
+                this.method = 'PATCH'; this.body = value;
+                this.headers.Prefer = 'return=representation';
+                return this;
+            }
             delete() { this.method = 'DELETE'; this.headers.Prefer = 'return=minimal'; return this; }
 
             then(resolve, reject) { return this.execute().then(resolve, reject); }

@@ -1951,7 +1951,9 @@
                 <div class="settings-section-title" id="settings-sync-section">数据与同步</div>
                 <div class="sync-summary">
                     书籍、评分、笔记与已缓存的阅读洞察会同步到当前账号。个人 API Key 只保存在本浏览器，不参与云同步。备份文件不会包含 API Key；恢复采用安全合并，不会删除书架中已有的其他书籍。
+                    <div class="ai-service-meta" id="cloud-sync-status" aria-live="polite"></div>
                     <div class="data-export-actions">
+                        <button type="button" class="data-export-btn" id="cloud-refresh-btn" onclick="reloadCloudShelf()">刷新云端书架</button>
                         <button type="button" class="data-export-btn" onclick="exportReadingCosmosBackup()">导出个人数据备份</button>
                         <button type="button" class="data-export-btn" id="data-restore-btn" onclick="openReadingCosmosRestorePicker()">恢复数据备份</button>
                         <input type="file" id="data-restore-input" accept="application/json,.json" hidden onchange="restoreReadingCosmosBackup(event)">
@@ -2358,6 +2360,7 @@ async function showSettings() {
     document.getElementById('settings-base-url').value = local.baseUrl;
     document.getElementById('settings-api-key').value = local.apiKey;
     setSettingsStatus('');
+    updateCloudSyncStatusDisplay();
     document.getElementById('settings-modal').classList.add('active');
     loadManagedAIStatus();
 }
@@ -3303,6 +3306,98 @@ async function checkLoginStatus() {
 // 同步全部书籍到Supabase
 // =============================
 
+function getBookSyncFingerprint(book) {
+    return JSON.stringify({
+        title: String(book.title || ''),
+        author: String(book.author || ''),
+        category: String(book.category || ''),
+        rating: Number(book.rating || 0),
+        summary: String(book.summary || ''),
+        concepts: String(book.concepts || ''),
+        thoughts: String(book.thoughts || ''),
+        actions: String(book.actions || ''),
+        coverUrl: String(book.coverUrl || ''),
+        timestamp: Number(book.timestamp || 0),
+        noteMethod: normalizeNoteMethod(book.noteMethod, book.category),
+        notesRevision: Number(book.notesRevision || 0),
+        aiData: sanitizeBookAIData(book.aiData),
+        readingDepth: normalizeReadingDepth(book.readingDepth),
+        importance: normalizeBookImportance(book.importance),
+        readingMinutes: normalizeReadingMinutes(book.readingMinutes),
+        finishedAt: normalizeFinishedAt(book.finishedAt)
+    });
+}
+
+function getCloudSyncStorageKey() {
+    return currentUser ? `reading_cosmos_last_sync:${currentUser.id}` : '';
+}
+
+function updateCloudSyncStatusDisplay(message = '', isError = false) {
+    const node = document.getElementById('cloud-sync-status');
+    if (!node) return;
+    const stored = getCloudSyncStorageKey() ? localStorage.getItem(getCloudSyncStorageKey()) : '';
+    node.textContent = message || (stored ? `上次成功同步：${new Date(stored).toLocaleString()}` : '尚无同步记录');
+    node.style.color = isError ? '#b91c1c' : '#64748b';
+}
+
+function markCloudSyncSuccess() {
+    const syncedAt = new Date().toISOString();
+    if (getCloudSyncStorageKey()) localStorage.setItem(getCloudSyncStorageKey(), syncedAt);
+    updateCloudSyncStatusDisplay(`同步完成：${new Date(syncedAt).toLocaleString()}`);
+}
+
+function hasPendingBookChanges() {
+    return booksData.some(book =>
+        !book.isDemo && (!book.cloudId || book.syncFingerprint !== getBookSyncFingerprint(book))
+    );
+}
+
+async function reloadCloudShelf() {
+    if (!requireAuthenticatedUser()) return;
+    if (hasPendingBookChanges() && !confirm('当前设备存在尚未同步的修改。刷新云端书架不会覆盖云端，但会替换当前页面内容；建议先导出备份。是否继续？')) {
+        return;
+    }
+    const button = document.getElementById('cloud-refresh-btn');
+    if (button) button.disabled = true;
+    updateCloudSyncStatusDisplay('正在读取云端最新数据…');
+    try {
+        const loaded = await activateAuthenticatedShelf(currentUser);
+        if (!loaded) throw new Error('云端书架读取失败');
+        markCloudSyncSuccess();
+        setSettingsStatus('已加载云端最新书架。');
+    } catch (error) {
+        updateCloudSyncStatusDisplay(error.message || '云端刷新失败，请稍后重试', true);
+    } finally {
+        if (button) button.disabled = false;
+    }
+}
+
+function buildBookSyncRow(book, userId, syncRevision) {
+    return {
+        source_book_id: book.id || crypto.randomUUID(),
+        user_id: userId,
+        title: book.title || '',
+        author: book.author || '',
+        category: book.category || '',
+        rating: book.rating || 0,
+        summary: book.summary || '',
+        concepts: book.concepts || '',
+        thoughts: book.thoughts || '',
+        actions: book.actions || '',
+        cover_url: book.coverUrl || '',
+        timestamp: book.timestamp || Date.now(),
+        note_method: normalizeNoteMethod(book.noteMethod, book.category),
+        notes_revision: Number(book.notesRevision || 0),
+        ai_data: sanitizeBookAIData(book.aiData),
+        reading_depth: normalizeReadingDepth(book.readingDepth),
+        importance: normalizeBookImportance(book.importance),
+        reading_minutes: normalizeReadingMinutes(book.readingMinutes),
+        ...(booksFinishedAtSupported ? { finished_at: normalizeFinishedAt(book.finishedAt) || null } : {}),
+        sync_revision: syncRevision,
+        updated_at: new Date().toISOString()
+    };
+}
+
 async function syncBooksToSupabase() {
     const user = currentUser;
 
@@ -3310,61 +3405,45 @@ async function syncBooksToSupabase() {
 
     console.log('开始同步书籍...');
 
-    const userBooks =
-        booksData.filter(book => !book.isDemo);
+    const userBooks = booksData.filter(book => !book.isDemo);
+    const dirtyBooks = userBooks.filter(book =>
+        !book.cloudId || book.syncFingerprint !== getBookSyncFingerprint(book)
+    );
+    if (!dirtyBooks.length) {
+        markCloudSyncSuccess();
+        return true;
+    }
 
-    for (const book of userBooks) {
+    const conflicts = [];
+    const failures = [];
 
-        const { data, error } =
-       await supabaseClient
-    .from('books')
-    .upsert(
-        {
+    for (const book of dirtyBooks) {
+        const expectedRevision = Math.max(0, Number(book.syncRevision || 0));
+        const nextRevision = expectedRevision + 1;
+        const row = buildBookSyncRow(book, user.id, nextRevision);
+        let data = null;
+        let error = null;
 
-            source_book_id:
-                book.id || crypto.randomUUID(),
-
-            user_id: user.id,
-
-            title: book.title || '',
-            author: book.author || '',
-            category: book.category || '',
-            rating: book.rating || 0,
-
-            summary: book.summary || '',
-            concepts: book.concepts || '',
-            thoughts: book.thoughts || '',
-            actions: book.actions || '',
-            cover_url: book.coverUrl || '',
-
-            timestamp: book.timestamp || Date.now(),
-            note_method:
-                normalizeNoteMethod(book.noteMethod, book.category),
-            notes_revision:
-                Number(book.notesRevision || 0),
-            ai_data:
-                sanitizeBookAIData(book.aiData),
-            reading_depth:
-                normalizeReadingDepth(book.readingDepth),
-            importance:
-                normalizeBookImportance(book.importance),
-            reading_minutes:
-                normalizeReadingMinutes(book.readingMinutes),
-            ...(booksFinishedAtSupported ? {
-                finished_at: normalizeFinishedAt(book.finishedAt) || null
-            } : {}),
-
-            updated_at:
-                new Date().toISOString()
-
-        },
-        {
-            onConflict:
-                'user_id,source_book_id'
+        if (book.cloudId) {
+            ({ data, error } = await supabaseClient
+                .from('books')
+                .update(row)
+                .eq('id', book.cloudId)
+                .eq('user_id', user.id)
+                .eq('sync_revision', expectedRevision)
+                .select('id, source_book_id, sync_revision')
+                .maybeSingle());
+            if (!error && !data) {
+                conflicts.push(book.title || '未命名书籍');
+                continue;
+            }
+        } else {
+            ({ data, error } = await supabaseClient
+                .from('books')
+                .upsert(row, { onConflict: 'user_id,source_book_id' })
+                .select('id, source_book_id, sync_revision')
+                .single());
         }
-    )
-    .select('id, source_book_id')
-    .single();
         if (error) {
 
             console.error(
@@ -3372,10 +3451,13 @@ async function syncBooksToSupabase() {
                 book.title,
                 error
             );
+            failures.push(book.title || '未命名书籍');
 
         } else {
 
             book.cloudId = data.id;
+            book.syncRevision = Number(data.sync_revision || nextRevision);
+            book.syncFingerprint = getBookSyncFingerprint(book);
 
             console.log(
                 '已同步',
@@ -3384,6 +3466,18 @@ async function syncBooksToSupabase() {
         }
     }
 
+    if (conflicts.length) {
+        const message = `检测到其他设备已更新：${conflicts.slice(0, 3).join('、')}。当前修改已保留在本机，未覆盖云端；请刷新云端书架后再编辑。`;
+        updateCloudSyncStatusDisplay(message, true);
+        showAIStatus(message, 'warning', 8000);
+    }
+    if (failures.length) {
+        const message = `${failures.length} 本书暂时无法同步，当前修改已保留在本机。`;
+        updateCloudSyncStatusDisplay(message, true);
+        showAIStatus(message, 'warning', 6000);
+    }
+    if (conflicts.length || failures.length) return false;
+    markCloudSyncSuccess();
     return true;
 }
 // =============================
@@ -3423,7 +3517,8 @@ async function loadBooksFromSupabase(user = currentUser) {
         ? Object.prototype.hasOwnProperty.call(data[0], 'finished_at')
         : !(await supabaseClient.from('books').select('finished_at').limit(1)).error;
 
-    booksData = data.map(book => ({
+    booksData = data.map(book => {
+        const normalizedBook = {
 
         cloudId:
             book.id,
@@ -3482,10 +3577,16 @@ async function loadBooksFromSupabase(user = currentUser) {
         finishedAt:
             normalizeFinishedAt(book.finished_at),
 
+        syncRevision:
+            Number(book.sync_revision || 0),
+
         aiData:
             sanitizeBookAIData(book.ai_data)
 
-    }));
+        };
+        normalizedBook.syncFingerprint = getBookSyncFingerprint(normalizedBook);
+        return normalizedBook;
+    });
 
     console.log(
         '已加载',
@@ -3910,8 +4011,7 @@ function getCategoryStyle(cat) {
         )
     );
 
-    await syncBooksToSupabase();
-    return true;
+    return await syncBooksToSupabase();
 }
 
         function updateGlobalCounter() {
